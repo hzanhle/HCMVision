@@ -1,0 +1,26 @@
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Host=localhost;Port=5432;Database=hcmc_rain_vision_dev;Username=postgres;Password=YOUR_PASSWORD"
+  },
+  "EmailSettings": {
+    "SmtpServer": "smtp.gmail.com",
+    "Port": 587,
+    "SenderName": "HCMC Rain Vision Alert",
+    "SenderEmail": "your-email@gmail.com",
+    "Password": "your-gmail-app-password"
+  },
+  "JwtSettings": {
+    "Key": "your-jwt-secret-key-at-least-32-characters-long"
+  },
+  "CloudinarySettings": {
+    "CloudName": "your-cloud-name",
+    "ApiKey": "your-api-key",
+    "ApiSecret": "your-api-secret"
+  },
+  "GoogleMaps": {
+    "ApiKey": "your-google-maps-api-key"
+  },
+  "Gemini": {
+    "ApiKey": "your-gemini-api-key"
+  }
+}
