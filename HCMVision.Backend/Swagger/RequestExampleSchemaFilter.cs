@@ -1,25 +1,25 @@
 using HcmcRainVision.Backend.Models.DTOs;
-using Microsoft.OpenApi.Any;
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
 using Swashbuckle.AspNetCore.SwaggerGen;
+using System.Text.Json.Nodes;
 
 namespace HcmcRainVision.Backend.Swagger
 {
     public class RequestExampleSchemaFilter : ISchemaFilter
     {
-        public void Apply(OpenApiSchema schema, SchemaFilterContext context)
+        public void Apply(IOpenApiSchema schema, SchemaFilterContext context)
         {
-            if (context.Type == typeof(CheckRouteRequest))
+            if (context.Type == typeof(CheckRouteRequest) && schema is OpenApiSchema concreteSchema)
             {
-                schema.Example = new OpenApiObject
+                concreteSchema.Example = new JsonObject
                 {
-                    ["currentLatitude"] = new OpenApiDouble(10.7769),
-                    ["currentLongitude"] = new OpenApiDouble(106.7009),
-                    ["originLatitude"] = new OpenApiNull(),
-                    ["originLongitude"] = new OpenApiNull(),
-                    ["destinationLatitude"] = new OpenApiDouble(10.8727102),
-                    ["destinationLongitude"] = new OpenApiDouble(106.7649932),
-                    ["routePoints"] = new OpenApiArray()
+                    ["currentLatitude"] = 10.7769,
+                    ["currentLongitude"] = 106.7009,
+                    ["originLatitude"] = null,
+                    ["originLongitude"] = null,
+                    ["destinationLatitude"] = 10.8727102,
+                    ["destinationLongitude"] = 106.7649932,
+                    ["routePoints"] = new JsonArray()
                 };
             }
         }
