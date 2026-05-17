@@ -222,7 +222,7 @@ public static class TestDataSeeder
 
         // Chỉ giữ danh sách phường thuộc cụm 1, 6, 8 theo yêu cầu.
         wards = wards
-            .Where(w => w.ClusterNumber is 1 or 6 or 8)
+            .Where(w => w.ClusterNumber is 1 or 3 or 4 or 6 or 8)
             .Select(w =>
             {
                 w.DistrictName = $"Cụm {w.ClusterNumber}";
