@@ -22,5 +22,8 @@
   },
   "Gemini": {
     "ApiKey": "your-gemini-api-key"
+  },
+  "FirebaseSettings": {
+    "ServiceAccountPath": "C:\\path\\to\\your\\firebase-adminsdk.json"
   }
 }

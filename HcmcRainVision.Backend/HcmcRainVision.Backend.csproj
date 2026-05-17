@@ -45,12 +45,6 @@
     </None>
   </ItemGroup>
 
-  <ItemGroup>
-    <!-- RainTrainer là project độc lập, loại khỏi backend để tránh compile trùng obj/generated files -->
-    <Compile Remove="RainTrainer\**\*.cs" />
-    <None Remove="RainTrainer\**\*" />
-    <Content Remove="RainTrainer\**\*" />
-    <EmbeddedResource Remove="RainTrainer\**\*" />
-  </ItemGroup>
+
 
 </Project>

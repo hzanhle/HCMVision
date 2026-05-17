@@ -85,7 +85,7 @@ namespace HcmcRainVision.Backend.Controllers
             // Lưu ý: Cần load lại Ward để trả về tên phường cho đẹp
             await _context.Entry(sub).Reference(s => s.Ward).LoadAsync();
 
-            return CreatedAtAction(nameof(GetMySubscriptions), new { id = sub.SubscriptionId }, new AlertSubscriptionResponseDto
+            return Created("", new AlertSubscriptionResponseDto
             {
                 SubscriptionId = sub.SubscriptionId,
                 WardId = sub.WardId ?? "",
