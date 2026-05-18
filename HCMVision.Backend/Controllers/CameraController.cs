@@ -434,7 +434,7 @@ namespace HcmcRainVision.Backend.Controllers
                 return StatusCode(502, new { message = "Không lấy được ảnh từ stream camera." });
             }
 
-            var prediction = _aiService.Predict(imageBytes);
+            var prediction = await _aiService.PredictAsync(imageBytes, HttpContext.RequestAborted);
             var shouldSaveLog = request?.SaveWeatherLog ?? true;
 
             if (shouldSaveLog)
@@ -443,6 +443,10 @@ namespace HcmcRainVision.Backend.Controllers
                 {
                     CameraId = camera.Id,
                     IsRaining = prediction.IsRaining,
+                    RainLevel = prediction.RainLevel,
+                    TrafficLevel = prediction.TrafficLevel,
+                    AiModel = prediction.AiModel,
+                    AiReason = prediction.AiReason,
                     Confidence = prediction.Confidence,
                     Timestamp = DateTime.UtcNow,
                     Location = new Point(camera.Longitude, camera.Latitude) { SRID = 4326 }
@@ -457,11 +461,20 @@ namespace HcmcRainVision.Backend.Controllers
                 cameraId = camera.Id,
                 cameraName = camera.Name,
                 streamUrl = primaryStream.StreamUrl,
-                prediction = new
+                prediction = prediction.IsRaining ? "CO MUA" : "KHONG MUA",
+                confidenceScore = Math.Round(prediction.Confidence * 100, 2) + " %",
+                rainLevel = prediction.RainLevel,
+                trafficLevel = prediction.TrafficLevel,
+                isRaining = prediction.IsRaining,
+                predictionDetails = new
                 {
                     isRaining = prediction.IsRaining,
+                    rainLevel = prediction.RainLevel,
+                    trafficLevel = prediction.TrafficLevel,
                     confidence = prediction.Confidence,
-                    aiMessage = prediction.Message
+                    aiMessage = prediction.Message,
+                    aiModel = prediction.AiModel,
+                    aiReason = prediction.AiReason
                 },
                 savedToWeatherLog = shouldSaveLog,
                 testedAtVn = VietnamTime.Now

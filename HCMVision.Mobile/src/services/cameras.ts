@@ -37,6 +37,18 @@ export interface RunAiTestResponse {
   prediction: string;
   confidenceScore: string;
   isAIWorking: boolean;
+  isRaining?: boolean;
+  rainLevel?: string;
+  trafficLevel?: string;
+  predictionDetails?: {
+    isRaining?: boolean;
+    rainLevel?: string;
+    trafficLevel?: string;
+    confidence?: number;
+    aiMessage?: string;
+    aiModel?: string;
+    aiReason?: string;
+  };
 }
 
 export const cameraService = {

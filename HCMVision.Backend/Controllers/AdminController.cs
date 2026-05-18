@@ -78,6 +78,8 @@ namespace HcmcRainVision.Backend.Controllers
                         CameraId = report.CameraId,
                         UserSaid = report.UserClaimIsRaining ? "Rain" : "No Rain",
                         AISaid = relevantLog.IsRaining ? "Rain" : "No Rain",
+                        AIRainLevel = relevantLog.RainLevel,
+                        AITrafficLevel = relevantLog.TrafficLevel,
                         AIConfidence = relevantLog.Confidence,
                         ImageUrl = relevantLog.ImageUrl, // Ảnh này sẽ dùng để train lại
                         ReportTime = report.Timestamp,
@@ -156,7 +158,7 @@ namespace HcmcRainVision.Backend.Controllers
             var weekAgo = DateTime.UtcNow.AddDays(-7);
             
             var stats = await _context.WeatherLogs
-                .Where(x => x.IsRaining && x.Timestamp >= weekAgo)
+                .Where(x => (x.IsRaining || x.RainLevel != "none") && x.Timestamp >= weekAgo)
                 .GroupBy(x => x.Timestamp.Hour)
                 .Select(g => new { Hour = g.Key, Count = g.Count() })
                 .OrderBy(x => x.Hour)

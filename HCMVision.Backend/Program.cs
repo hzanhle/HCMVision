@@ -84,9 +84,38 @@ builder.Services.AddHostedService<RainScanningWorker>();
 // 5. Đăng ký AI Service với fallback an toàn khi model ML.NET không khả dụng
 var modelFilePath = Path.Combine(builder.Environment.ContentRootPath, "MLModels", "RainModel.zip");
 var enableMlModel = builder.Configuration.GetValue("AI:EnableModel", true);
+var aiProvider = builder.Configuration.GetValue<string>("AI:Provider") ?? "ML.NET";
 var canUseMlModel = enableMlModel && File.Exists(modelFilePath);
 
-if (canUseMlModel)
+builder.Services.Configure<QwenVisionOptions>(builder.Configuration.GetSection("AI:Ollama"));
+builder.Services.Configure<RemoteQwenOptions>(builder.Configuration.GetSection("AI:RemoteQwen"));
+
+if (enableMlModel && aiProvider.Equals("RemoteQwen", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddHttpClient<IRainPredictionService, RemoteQwenVisionPredictionService>((sp, client) =>
+    {
+        var config = sp.GetRequiredService<IConfiguration>();
+        var baseUrl = config.GetValue<string>("AI:RemoteQwen:BaseUrl");
+        var timeoutSeconds = config.GetValue("AI:RemoteQwen:TimeoutSeconds", 120);
+        if (!string.IsNullOrWhiteSpace(baseUrl))
+        {
+            client.BaseAddress = new Uri(baseUrl.EndsWith('/') ? baseUrl : $"{baseUrl}/");
+        }
+        client.Timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 10, 300));
+    });
+}
+else if (enableMlModel && aiProvider.Equals("OllamaQwen", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddHttpClient<IRainPredictionService, QwenVisionPredictionService>((sp, client) =>
+    {
+        var config = sp.GetRequiredService<IConfiguration>();
+        var baseUrl = config.GetValue<string>("AI:Ollama:BaseUrl") ?? "http://localhost:11434";
+        var timeoutSeconds = config.GetValue("AI:Ollama:TimeoutSeconds", 120);
+        client.BaseAddress = new Uri(baseUrl.EndsWith('/') ? baseUrl : $"{baseUrl}/");
+        client.Timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 10, 300));
+    });
+}
+else if (canUseMlModel)
 {
     try
     {

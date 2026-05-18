@@ -77,6 +77,11 @@ export interface WeatherAiResult {
   prediction: string;
   confidenceScore: string;
   isAIWorking: boolean;
+  isRaining?: boolean;
+  rainLevel?: string;
+  trafficLevel?: string;
+  aiModel?: string;
+  aiReason?: string;
 }
 
 export const weatherService = {

@@ -1154,6 +1154,8 @@ public static class TestDataSeeder
                     CameraId = "CAM_BenThanh",
                     Location = new Point(106.6983, 10.7721) { SRID = 4326 },
                     IsRaining = true,
+                    RainLevel = "medium",
+                    TrafficLevel = "slow",
                     Confidence = 0.87f,
                     Timestamp = DateTime.UtcNow.AddMinutes(-5)
                 },
@@ -1162,6 +1164,8 @@ public static class TestDataSeeder
                     CameraId = "CAM_NhaThoDucBa",
                     Location = new Point(106.6990, 10.7797) { SRID = 4326 },
                     IsRaining = false,
+                    RainLevel = "none",
+                    TrafficLevel = "clear",
                     Confidence = 0.92f,
                     Timestamp = DateTime.UtcNow.AddMinutes(-10)
                 },
@@ -1170,6 +1174,8 @@ public static class TestDataSeeder
                     CameraId = "CAM_PhoNguyen",
                     Location = new Point(106.6950, 10.7650) { SRID = 4326 },
                     IsRaining = true,
+                    RainLevel = "heavy",
+                    TrafficLevel = "jam",
                     Confidence = 0.78f,
                     Timestamp = DateTime.UtcNow.AddMinutes(-15)
                 },
@@ -1178,6 +1184,8 @@ public static class TestDataSeeder
                     CameraId = "CAM_QuanTan",
                     Location = new Point(106.7050, 10.7850) { SRID = 4326 },
                     IsRaining = false,
+                    RainLevel = "none",
+                    TrafficLevel = "clear",
                     Confidence = 0.95f,
                     Timestamp = DateTime.UtcNow.AddMinutes(-20)
                 }

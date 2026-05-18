@@ -15,3 +15,8 @@ appsettings.Local.json
 .env
 .env.local
 .env.production
+
+# Runtime generated logs/images
+*.log
+logs/
+wwwroot/images/rain_logs/

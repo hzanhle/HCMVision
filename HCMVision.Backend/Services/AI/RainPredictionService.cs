@@ -40,7 +40,10 @@ namespace HcmcRainVision.Backend.Services.AI
                 {
                     IsRaining = isRaining,
                     Confidence = maxScore,
-                    Message = "AI Prediction"
+                    Message = "AI Prediction",
+                    RainLevel = isRaining ? "heavy" : "none",
+                    TrafficLevel = "unknown",
+                    AiModel = "ML.NET RainModel"
                 };
             }
             catch (Exception ex)
@@ -50,9 +53,17 @@ namespace HcmcRainVision.Backend.Services.AI
                 { 
                     IsRaining = false, 
                     Confidence = 0, 
-                    Message = $"Error: {ex.GetType().Name}" 
+                    Message = $"Error: {ex.GetType().Name}",
+                    RainLevel = "none",
+                    TrafficLevel = "unknown",
+                    AiModel = "ML.NET RainModel"
                 };
             }
+        }
+
+        public Task<RainPredictionResult> PredictAsync(byte[] imageBytes, CancellationToken token = default)
+        {
+            return Task.FromResult(Predict(imageBytes));
         }
     }
 }

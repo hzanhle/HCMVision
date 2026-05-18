@@ -11,5 +11,7 @@ namespace HcmcRainVision.Backend.Services.AI
         /// <param name="imageBytes">Dữ liệu ảnh dạng byte array</param>
         /// <returns>Kết quả dự đoán</returns>
         RainPredictionResult Predict(byte[] imageBytes);
+
+        Task<RainPredictionResult> PredictAsync(byte[] imageBytes, CancellationToken token = default);
     }
 }

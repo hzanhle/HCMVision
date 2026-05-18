@@ -47,6 +47,24 @@ namespace HcmcRainVision.Backend.Data
                 .HasIndex(x => x.Timestamp)
                 .HasDatabaseName("ix_weather_logs_timestamp");
 
+            modelBuilder.Entity<WeatherLog>()
+                .Property(x => x.RainLevel)
+                .HasColumnName("rain_level")
+                .HasDefaultValue("none");
+
+            modelBuilder.Entity<WeatherLog>()
+                .Property(x => x.TrafficLevel)
+                .HasColumnName("traffic_level")
+                .HasDefaultValue("unknown");
+
+            modelBuilder.Entity<WeatherLog>()
+                .Property(x => x.AiModel)
+                .HasColumnName("ai_model");
+
+            modelBuilder.Entity<WeatherLog>()
+                .Property(x => x.AiReason)
+                .HasColumnName("ai_reason");
+
             // Index tổng hợp cho query theo camera và thời gian (composite index)
             modelBuilder.Entity<WeatherLog>()
                 .HasIndex(x => new { x.CameraId, x.Timestamp })

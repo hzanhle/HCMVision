@@ -77,9 +77,13 @@ namespace HcmcRainVision.Backend.Controllers
                 Latitude = x.Location?.Y ?? 0,  // Y là Vĩ độ
                 Longitude = x.Location?.X ?? 0, // X là Kinh độ
                 IsRaining = x.IsRaining,
+                RainLevel = x.RainLevel,
+                TrafficLevel = x.TrafficLevel,
                 Confidence = x.Confidence,
                 TimeAgo = GetTimeAgo(x.Timestamp),
-                ImageUrl = x.ImageUrl
+                ImageUrl = x.ImageUrl,
+                AiModel = x.AiModel,
+                AiReason = x.AiReason
             });
 
             return Ok(result);
@@ -103,14 +107,15 @@ namespace HcmcRainVision.Backend.Controllers
                 {
                     g.CameraId,
                     g.Timestamp,
-                    g.IsRaining
+                    g.IsRaining,
+                    g.RainLevel
                 })
                 .ToListAsync();
 
             var rainingCameraCount = recentLogs
                 .GroupBy(x => x.CameraId!)
                 .Select(g => g.OrderByDescending(x => x.Timestamp).First())
-                .Count(x => x.IsRaining);
+                .Count(x => x.IsRaining || !string.Equals(x.RainLevel, "none", StringComparison.OrdinalIgnoreCase));
 
             return Ok(new
             {
@@ -139,6 +144,8 @@ namespace HcmcRainVision.Backend.Controllers
                     x.CameraId,
                     x.Timestamp,
                     x.IsRaining,
+                    x.RainLevel,
+                    x.TrafficLevel,
                     x.Confidence,
                     x.ImageUrl
                 })
@@ -147,7 +154,7 @@ namespace HcmcRainVision.Backend.Controllers
             var latestByCamera = recentLogs
                 .GroupBy(x => x.CameraId!)
                 .Select(g => g.OrderByDescending(x => x.Timestamp).First())
-                .Where(x => x.IsRaining)
+                .Where(x => x.IsRaining || !string.Equals(x.RainLevel, "none", StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             var rainingCameraIds = latestByCamera
@@ -180,6 +187,9 @@ namespace HcmcRainVision.Backend.Controllers
                         cam.Longitude,
                         cam.WardId,
                         CameraStatus = cam.Status,
+                        IsRaining = log.IsRaining,
+                        RainLevel = log.RainLevel,
+                        TrafficLevel = log.TrafficLevel,
                         Confidence = log.Confidence,
                         LastRainAtUtc = log.Timestamp,
                         ImageUrl = log.ImageUrl
@@ -216,7 +226,7 @@ namespace HcmcRainVision.Backend.Controllers
             byte[] rawBytes = ms.ToArray();
 
             byte[] processedBytes = imagePreProcessor.ProcessForAI(rawBytes) ?? rawBytes;
-            var result = aiService.Predict(processedBytes);
+            var result = await aiService.PredictAsync(processedBytes, HttpContext.RequestAborted);
 
             if (!string.IsNullOrEmpty(result.Message) && result.Message.StartsWith("Error", StringComparison.OrdinalIgnoreCase))
             {
@@ -232,7 +242,12 @@ namespace HcmcRainVision.Backend.Controllers
             {
                 Message = "Du doan tu AI Model thuc te",
                 Prediction = result.IsRaining ? "CO MUA" : "KHONG MUA",
+                IsRaining = result.IsRaining,
+                RainLevel = result.RainLevel,
+                TrafficLevel = result.TrafficLevel,
                 ConfidenceScore = Math.Round(result.Confidence * 100, 2) + " %",
+                AiModel = result.AiModel,
+                AiReason = result.AiReason,
                 IsAIWorking = true
             });
         }
@@ -470,8 +485,8 @@ namespace HcmcRainVision.Backend.Controllers
             // 2. Lấy các điểm đang mưa trong 30 phút qua từ DB
             var timeLimit = DateTime.UtcNow.AddMinutes(-30);
             var rainingLogs = await _context.WeatherLogs
-                .Where(x => x.IsRaining && x.Timestamp >= timeLimit)
-                .Select(x => new { x.Location, x.CameraId })
+                .Where(x => (x.IsRaining || x.RainLevel != "none") && x.Timestamp >= timeLimit)
+                .Select(x => new { x.Location, x.CameraId, x.RainLevel, x.TrafficLevel, x.Confidence })
                 .ToListAsync();
 
             var warnings = new List<object>();
@@ -490,7 +505,11 @@ namespace HcmcRainVision.Backend.Controllers
                 {
                     warnings.Add(new { 
                         Lat = log.Location.Y, 
-                        Lng = log.Location.X, 
+                        Lng = log.Location.X,
+                        CameraId = log.CameraId,
+                        RainLevel = log.RainLevel,
+                        TrafficLevel = log.TrafficLevel,
+                        Confidence = log.Confidence,
                         Message = $"Mưa to gần Camera {log.CameraId}" 
                     });
                 }
@@ -625,7 +644,7 @@ namespace HcmcRainVision.Backend.Controllers
             var timeLimit = DateTime.UtcNow.AddMinutes(-30);
             
             var rainingLogs = await _context.WeatherLogs
-                .Where(x => x.IsRaining && x.Timestamp >= timeLimit && x.Location != null)
+                .Where(x => (x.IsRaining || x.RainLevel != "none") && x.Timestamp >= timeLimit && x.Location != null)
                 .Select(x => new 
                 {
                     Lat = x.Location!.Y,      // Vĩ độ

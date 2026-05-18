@@ -24,6 +24,16 @@ export interface UserLocation {
   longitude: number;
 }
 
+export interface CameraAiWeather {
+  prediction: string;
+  confidenceScore: string;
+  isRaining?: boolean;
+  rainLevel?: string;
+  trafficLevel?: string;
+  imageUrl?: string | null;
+  timestamp?: string;
+}
+
 // Store State Interface
 interface AppState {
   // Authentication State
@@ -104,10 +114,10 @@ interface AppState {
   getAreasByRainStatus: (status: string) => Area[];
 
   // AI rain prediction per camera (from /api/Weather/test-ai)
-  aiByCameraId: Record<string, { prediction: string; confidenceScore: string }>;
+  aiByCameraId: Record<string, CameraAiWeather>;
   setAiForCamera: (
     cameraId: string | number,
-    data: { prediction: string; confidenceScore: string },
+    data: CameraAiWeather,
   ) => void;
 }
 
@@ -140,8 +150,12 @@ const normalizeFromBoolean = (isRaining: any): string => {
 };
 
 const resolveWeatherStatus = (item: any): string => {
-  if (typeof item?.isRaining === "boolean") {
-    return normalizeFromBoolean(item.isRaining);
+  if (item?.rainLevel) {
+    return normalizeWeatherStatus(item.rainLevel);
+  }
+
+  if (item?.rain_level) {
+    return normalizeWeatherStatus(item.rain_level);
   }
 
   if (item?.weatherStatus) {
@@ -160,6 +174,10 @@ const resolveWeatherStatus = (item: any): string => {
       return "none";
     }
     return normalizeWeatherStatus(item.intensity);
+  }
+
+  if (typeof item?.isRaining === "boolean") {
+    return normalizeFromBoolean(item.isRaining);
   }
 
   return "none";
@@ -301,10 +319,26 @@ const useAppStore = create<AppState>((set, get) => ({
             : [];
 
       const weatherByCameraId = new Map<string, string>();
+      const nextAiByCameraId: Record<string, CameraAiWeather> = {
+        ...get().aiByCameraId,
+      };
       latestItems.forEach((item: any) => {
         const cameraId = item?.cameraId || item?.camera?.id || item?.id;
         if (!cameraId) return;
-        weatherByCameraId.set(String(cameraId), resolveWeatherStatus(item));
+        const rainLevel = resolveWeatherStatus(item);
+        weatherByCameraId.set(String(cameraId), rainLevel);
+        nextAiByCameraId[String(cameraId)] = {
+          prediction: item?.isRaining ? "CO MUA" : "KHONG MUA",
+          confidenceScore:
+            typeof item?.confidence === "number"
+              ? `${Math.round(item.confidence * 100)} %`
+              : "",
+          isRaining: Boolean(item?.isRaining),
+          rainLevel,
+          trafficLevel: item?.trafficLevel || item?.traffic_level || "unknown",
+          imageUrl: item?.imageUrl || null,
+          timestamp: item?.timestamp,
+        };
       });
 
       const nextCameras = cameras.map((camera: any) => {
@@ -384,6 +418,7 @@ const useAppStore = create<AppState>((set, get) => ({
         cameras: nextCameras,
         areas: nextAreas,
         alerts: mergedAlerts,
+        aiByCameraId: nextAiByCameraId,
         isLoading: false,
         error: latestResult.success ? null : latestResult.error || null,
         lastUpdated: new Date(),

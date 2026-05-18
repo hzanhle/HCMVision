@@ -14,10 +14,11 @@ import FilterSheet from "../../components/map/FilterSheet";
 import LocateButton from "../../components/map/LocateButton";
 import { useFavorites } from "../../context/FavoritesContext";
 import { cameraService } from "../../services/cameras";
+import { startRainHub } from "../../services/rainHub";
+import { weatherService } from "../../services/weather";
 import useAppStore from "../../store/useAppStore";
 import { Camera } from "../../types/camera";
 
-// TP.HCM coordinates
 const HCMC_REGION = {
   latitude: 10.7769,
   longitude: 106.7009,
@@ -33,38 +34,51 @@ interface FilterState {
   favoritesOnly: boolean;
 }
 
-interface UserCoords {
-  latitude: number;
-  longitude: number;
-}
-
-const normalizePrediction = (value: unknown): string => {
-  return typeof value === "string" ? value : "";
+const normalizeRainLevel = (
+  value: unknown,
+): "none" | "light" | "medium" | "heavy" => {
+  const raw = String(value || "").toLowerCase();
+  if (["heavy", "high", "storm", "severe"].some((item) => raw.includes(item))) {
+    return "heavy";
+  }
+  if (["medium", "moderate"].some((item) => raw.includes(item))) {
+    return "medium";
+  }
+  if (["light", "drizzle", "low"].some((item) => raw.includes(item))) {
+    return "light";
+  }
+  return "none";
 };
 
-const sleep = (ms: number) =>
-  new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
+const rainMarkerStyle = (level: string) => {
+  switch (level) {
+    case "heavy":
+      return { label: "H", color: "#dc2626", textColor: "white" };
+    case "medium":
+      return { label: "M", color: "#f97316", textColor: "white" };
+    case "light":
+      return { label: "L", color: "#38bdf8", textColor: "#0f172a" };
+    default:
+      return { label: "CAM", color: "white", textColor: "#111827" };
+  }
+};
+
+const formatConfidence = (value: unknown): string => {
+  return typeof value === "number" ? `${Math.round(value * 100)} %` : "";
+};
 
 export default function MapHomeScreen({ navigation }: any) {
   const mapRef = useRef<MapView>(null);
-  const [mapReady, setMapReady] = useState(false);
   const [locating, setLocating] = useState(false);
-  const [currentLocation, setCurrentLocation] = useState<UserCoords | null>(
-    null,
-  );
-
-  // API cameras
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [cameraLoading, setCameraLoading] = useState(true);
 
   const { favoriteIds } = useFavorites();
   const aiByCameraId = useAppStore((s: any) => s.aiByCameraId);
   const setAiForCamera = useAppStore((s: any) => s.setAiForCamera);
+  const syncWeatherData = useAppStore((s: any) => s.syncWeatherData);
   const token = useAppStore((s) => s.token);
 
-  // Filter states
   const [filterSheetVisible, setFilterSheetVisible] = useState(false);
   const [appliedFilters, setAppliedFilters] = useState<FilterState>({
     rainStatus: null,
@@ -72,71 +86,63 @@ export default function MapHomeScreen({ navigation }: any) {
     favoritesOnly: false,
   });
 
-  const handleMapReady = () => {
-    setMapReady(true);
-  };
+  const applyWeatherUpdate = useCallback(
+    (item: any) => {
+      const cameraId = item?.cameraId || item?.camera?.id || item?.id;
+      if (!cameraId) return;
 
-  const runBulkAiCheck = useCallback(
-    async (cameraList: Camera[]) => {
-      try {
-        const pending = cameraList.filter(
-          (cam) => !aiByCameraId?.[String(cam.id)],
-        );
+      const rainLevel = normalizeRainLevel(
+        item?.rainLevel || item?.rain_level || item?.weatherStatus,
+      );
+      const isRaining =
+        typeof item?.isRaining === "boolean"
+          ? item.isRaining
+          : rainLevel !== "none";
+      const trafficLevel = item?.trafficLevel || item?.traffic_level || "unknown";
 
-        // Giới hạn số request đồng thời để giảm tải backend.
-        const CONCURRENCY = 4;
-        for (let i = 0; i < pending.length; i += CONCURRENCY) {
-          const chunk = pending.slice(i, i + CONCURRENCY);
-          await Promise.all(
-            chunk.map(async (cam) => {
-              const runOnce = async () => {
-                const result = await cameraService.runAiTest(cam.id, {
-                  saveWeatherLog: true,
-                });
-                const prediction = normalizePrediction(result.data?.prediction);
-                if (result.success && prediction) {
-                  setAiForCamera(cam.id, {
-                    prediction,
-                    confidenceScore:
-                      typeof result.data?.confidenceScore === "string"
-                        ? result.data.confidenceScore
-                        : "",
-                  });
-                  return true;
-                }
-                return false;
-              };
+      setAiForCamera(cameraId, {
+        prediction: isRaining ? "CO MUA" : "KHONG MUA",
+        confidenceScore: formatConfidence(item?.confidence),
+        isRaining,
+        rainLevel,
+        trafficLevel,
+        imageUrl: item?.imageUrl || null,
+        timestamp: item?.timestamp,
+      });
 
-              try {
-                const firstOk = await runOnce();
-                if (firstOk) return;
-
-                // Retry 1 lần cho lỗi 502 sau ~2.5 giây để tăng tỉ lệ thành công.
-                await sleep(2500);
-                await runOnce();
-              } catch (error: any) {
-                const status = error?.response?.status;
-                if (status === 502) {
-                  try {
-                    await sleep(2500);
-                    await runOnce();
-                  } catch {
-                    // bỏ qua lỗi sau retry
-                  }
-                }
-                // bỏ qua lỗi từng camera, không chặn cả batch
+      setCameras((current) =>
+        current.map((camera: any) =>
+          String(camera.id) === String(cameraId)
+            ? {
+                ...camera,
+                rainStatus: rainLevel,
+                weatherStatus: rainLevel,
+                trafficLevel,
               }
-            }),
-          );
-        }
-      } catch {
-        // im lặng nếu bulk AI fail, map vẫn hoạt động bình thường
-      }
+            : camera,
+        ),
+      );
     },
-    [aiByCameraId, setAiForCamera],
+    [setAiForCamera],
   );
 
-  // Fetch cameras from API
+  const refreshLatestWeather = useCallback(async () => {
+    const result = await weatherService.getLatest(token || undefined);
+    if (!result.success) return;
+
+    const payload: any = result.data;
+    const items = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.items)
+        ? payload.items
+        : payload
+          ? [payload]
+          : [];
+
+    items.forEach(applyWeatherUpdate);
+    syncWeatherData();
+  }, [applyWeatherUpdate, syncWeatherData, token]);
+
   const fetchCameras = useCallback(async () => {
     setCameraLoading(true);
     const result = await cameraService.getAllCameras();
@@ -146,17 +152,43 @@ export default function MapHomeScreen({ navigation }: any) {
     setCameraLoading(false);
   }, []);
 
-  // Khi đã có token (sau đăng nhập) và danh sách cameras, tự động chạy AI cho tất cả camera
-  useEffect(() => {
-    if (!token || cameras.length === 0) return;
-    runBulkAiCheck(cameras);
-  }, [token, cameras, runBulkAiCheck]);
-
   useEffect(() => {
     fetchCameras();
   }, [fetchCameras]);
 
-  // Filter cameras based on applied filters
+  useEffect(() => {
+    refreshLatestWeather();
+    const interval = setInterval(refreshLatestWeather, 60000);
+    return () => clearInterval(interval);
+  }, [refreshLatestWeather]);
+
+  useEffect(() => {
+    let disposed = false;
+    let stop: (() => Promise<void>) | undefined;
+
+    startRainHub({
+      token,
+      onRainAlert: applyWeatherUpdate,
+    })
+      .then((cleanup) => {
+        if (disposed) {
+          cleanup();
+          return;
+        }
+        stop = cleanup;
+      })
+      .catch((error) => {
+        console.warn("SignalR rain hub connection failed:", error?.message || error);
+      });
+
+    return () => {
+      disposed = true;
+      if (stop) {
+        stop();
+      }
+    };
+  }, [applyWeatherUpdate, token]);
+
   const filteredCameras = useMemo(() => {
     let filtered = [...cameras];
 
@@ -168,20 +200,18 @@ export default function MapHomeScreen({ navigation }: any) {
       filtered = filtered.filter((cam) => favoriteIds.has(cam.id));
     }
 
+    if (appliedFilters.rainStatus) {
+      filtered = filtered.filter((camera: any) => {
+        const ai = aiByCameraId?.[String(camera.id)];
+        const level = normalizeRainLevel(
+          ai?.rainLevel || camera.rainStatus || camera.weatherStatus,
+        );
+        return level.toUpperCase() === appliedFilters.rainStatus;
+      });
+    }
+
     return filtered;
-  }, [cameras, appliedFilters, favoriteIds]);
-
-  const handleFilterPress = () => {
-    setFilterSheetVisible(true);
-  };
-
-  const handleFilterClose = () => {
-    setFilterSheetVisible(false);
-  };
-
-  const handleFilterApply = (filters: FilterState) => {
-    setAppliedFilters(filters);
-  };
+  }, [aiByCameraId, cameras, appliedFilters, favoriteIds]);
 
   const getMarkerColor = (status: string) => {
     return status === "Active" ? "#22c55e" : "#6b7280";
@@ -208,7 +238,6 @@ export default function MapHomeScreen({ navigation }: any) {
       });
 
       const { latitude, longitude } = location.coords;
-      setCurrentLocation({ latitude, longitude });
 
       if (mapRef.current) {
         mapRef.current.animateToRegion(
@@ -241,7 +270,6 @@ export default function MapHomeScreen({ navigation }: any) {
         style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0 }}
         provider={PROVIDER_DEFAULT}
         initialRegion={HCMC_REGION}
-        onMapReady={handleMapReady}
         showsUserLocation={true}
         showsMyLocationButton={false}
         showsCompass={true}
@@ -256,14 +284,13 @@ export default function MapHomeScreen({ navigation }: any) {
           maximumZ={19}
         />
 
-        {filteredCameras.map((camera) => {
+        {filteredCameras.map((camera: any) => {
           const ai = aiByCameraId?.[String(camera.id)];
-          const prediction = normalizePrediction(ai?.prediction);
-          const aiIcon = ai
-            ? prediction.toUpperCase().includes("CO MUA")
-              ? "☔"
-              : "🌤"
-            : null;
+          const rainLevel = normalizeRainLevel(
+            ai?.rainLevel || camera.rainStatus || camera.weatherStatus,
+          );
+          const trafficLevel = ai?.trafficLevel || camera.trafficLevel || "unknown";
+          const marker = rainMarkerStyle(rainLevel);
 
           return (
             <Marker
@@ -273,33 +300,29 @@ export default function MapHomeScreen({ navigation }: any) {
                 longitude: camera.longitude,
               }}
               title={camera.name}
-              description={
-                camera.ward ? `${camera.ward.name}` : `ID: ${camera.id}`
-              }
+              description={`Rain: ${rainLevel} | Traffic: ${trafficLevel}`}
               pinColor={getMarkerColor(camera.status)}
               onCalloutPress={() =>
                 navigation.navigate("CameraDetailMap", { camera })
               }
             >
-              <View
-                style={{
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
+              <View style={{ alignItems: "center", justifyContent: "center" }}>
                 <View
                   style={{
-                    backgroundColor: "white",
-                    paddingHorizontal: 4,
-                    paddingVertical: 2,
-                    borderRadius: 12,
-                    marginBottom: 2,
-                    minHeight: 20,
+                    backgroundColor: marker.color,
+                    paddingHorizontal: 6,
+                    paddingVertical: 3,
+                    borderRadius: 10,
+                    borderColor:
+                      rainLevel === "none" ? getMarkerColor(camera.status) : marker.color,
+                    borderWidth: 1,
+                    minWidth: 28,
+                    alignItems: "center",
                     justifyContent: "center",
                   }}
                 >
-                  <Text style={{ fontSize: 12 }}>
-                    {aiIcon ? aiIcon : "📷"}
+                  <Text style={{ fontSize: 11, fontWeight: "700", color: marker.textColor }}>
+                    {marker.label}
                   </Text>
                 </View>
               </View>
@@ -340,7 +363,7 @@ export default function MapHomeScreen({ navigation }: any) {
                     onPress={() => navigation.navigate("Settings")}
                     className="w-10 h-10 items-center justify-center"
                   >
-                    <Text className="text-2xl">⚙️</Text>
+                    <Text className="text-lg">SET</Text>
                   </TouchableOpacity>
                 </HStack>
               </HStack>
@@ -353,7 +376,7 @@ export default function MapHomeScreen({ navigation }: any) {
           style={{ zIndex: 5 }}
           pointerEvents="box-none"
         >
-          <FilterButton onPress={handleFilterPress} />
+          <FilterButton onPress={() => setFilterSheetVisible(true)} />
         </View>
 
         <View
@@ -374,14 +397,14 @@ export default function MapHomeScreen({ navigation }: any) {
           }}
           className="w-12 h-12 rounded-2xl bg-white/95 items-center justify-center border border-gray-200"
         >
-          <Text className="text-2xl">💬</Text>
+          <Text className="text-sm font-semibold">CHAT</Text>
         </TouchableOpacity>
       </View>
 
       <FilterSheet
         visible={filterSheetVisible}
-        onClose={handleFilterClose}
-        onApply={handleFilterApply}
+        onClose={() => setFilterSheetVisible(false)}
+        onApply={setAppliedFilters}
         initialFilters={appliedFilters}
       />
     </View>

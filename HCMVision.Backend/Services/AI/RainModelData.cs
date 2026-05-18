@@ -28,5 +28,9 @@ namespace HcmcRainVision.Backend.Services.AI
         public bool IsRaining { get; set; }
         public float Confidence { get; set; } // 0 -> 100%
         public string? Message { get; set; }
+        public string RainLevel { get; set; } = "none";
+        public string TrafficLevel { get; set; } = "unknown";
+        public string? AiModel { get; set; }
+        public string? AiReason { get; set; }
     }
 }

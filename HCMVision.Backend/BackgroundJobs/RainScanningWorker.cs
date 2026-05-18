@@ -20,6 +20,15 @@ namespace HcmcRainVision.Backend.BackgroundJobs
         private readonly ILogger<RainScanningWorker> _logger;
         private readonly IWebHostEnvironment _env;
         private readonly IHubContext<RainHub> _hubContext;
+        private readonly int _maxParallelism;
+        private readonly string _aiProvider;
+        private readonly bool _remoteQwenSessionEnabled;
+        private readonly int _scanIntervalMinutes;
+        private readonly int _maxCamerasPerScan;
+        private readonly int _dailyMaxInferences;
+        private readonly object _quotaLock = new();
+        private DateTime _quotaDateUtc = DateTime.UtcNow.Date;
+        private int _dailyInferenceCount;
 
         // Thay bool bằng SemaphoreSlim để lock an toàn hơn
         private readonly SemaphoreSlim _lock = new SemaphoreSlim(1, 1);
@@ -27,11 +36,27 @@ namespace HcmcRainVision.Backend.BackgroundJobs
         // Biến để theo dõi lần chạy cleanup cuối cùng
         private DateTime _lastCleanupTime = DateTime.MinValue;
 
-        public RainScanningWorker(IServiceProvider serviceProvider, ILogger<RainScanningWorker> logger, IWebHostEnvironment env, IHubContext<RainHub> hubContext)
+        public RainScanningWorker(
+            IServiceProvider serviceProvider,
+            ILogger<RainScanningWorker> logger,
+            IWebHostEnvironment env,
+            IHubContext<RainHub> hubContext,
+            IConfiguration configuration)
         {
             _serviceProvider = serviceProvider;
             _logger = logger;
-            _env = env;            _hubContext = hubContext;        }
+            _env = env;
+            _hubContext = hubContext;
+            _maxParallelism = Math.Clamp(configuration.GetValue("AI:MaxParallelism", 1), 1, 3);
+            _aiProvider = configuration.GetValue<string>("AI:Provider") ?? string.Empty;
+            _remoteQwenSessionEnabled = configuration.GetValue("AI:RemoteQwen:SessionEnabled", false);
+            _scanIntervalMinutes = Math.Clamp(
+                configuration.GetValue("AI:RemoteQwen:ScanIntervalMinutes", AppConstants.Timing.CameraScanIntervalMinutes),
+                1,
+                240);
+            _maxCamerasPerScan = Math.Max(1, configuration.GetValue("AI:RemoteQwen:MaxCamerasPerScan", 20));
+            _dailyMaxInferences = Math.Max(0, configuration.GetValue("AI:RemoteQwen:DailyMaxInferences", 160));
+        }
 
         public override async Task StartAsync(CancellationToken cancellationToken)
         {
@@ -77,6 +102,14 @@ namespace HcmcRainVision.Backend.BackgroundJobs
                     continue;
                 }
 
+                if (IsRemoteQwenProvider() && !_remoteQwenSessionEnabled)
+                {
+                    _lock.Release();
+                    _logger.LogInformation("RemoteQwen session is disabled. Skipping rain scan until Colab is ready.");
+                    await Task.Delay(TimeSpan.FromMinutes(_scanIntervalMinutes), stoppingToken);
+                    continue;
+                }
+
                 Guid jobId = Guid.NewGuid();
 
                 try
@@ -102,6 +135,27 @@ namespace HcmcRainVision.Backend.BackgroundJobs
                         var crawlableStreams = streams.Where(IsStaticImageStream).ToList();
                         var skippedStreams = streams.Count - crawlableStreams.Count;
 
+                        if (IsRemoteQwenProvider())
+                        {
+                            var remainingQuota = GetRemainingDailyInferenceQuota();
+                            if (remainingQuota <= 0)
+                            {
+                                crawlableStreams = new List<CameraStream>();
+                                _logger.LogWarning(
+                                    "RemoteQwen daily inference quota exhausted ({Used}/{Limit}). No cameras will be scanned in this cycle.",
+                                    _dailyInferenceCount,
+                                    _dailyMaxInferences);
+                            }
+                            else
+                            {
+                                crawlableStreams = crawlableStreams
+                                    .OrderByDescending(s => s.Camera.Status == nameof(CameraStatus.Active))
+                                    .ThenBy(s => s.Camera.LastUpdatedAt ?? DateTime.MinValue)
+                                    .Take(Math.Min(_maxCamerasPerScan, remainingQuota))
+                                    .ToList();
+                            }
+                        }
+
                         _logger.LogInformation($"Đã tải {streams.Count} CameraStream cần quét. Hợp lệ ảnh tĩnh: {crawlableStreams.Count}, bỏ qua: {skippedStreams}.");
 
                         // TỐI ƯU N+1: Load tất cả subscriptions RA NGOÀI vòng lặp
@@ -122,11 +176,12 @@ namespace HcmcRainVision.Backend.BackgroundJobs
 
                         // Xử lý song song (Max 3 camera cùng lúc để tránh quá tải database)
                         // Giảm từ 5 xuống 3 để tránh timeout khi có nhiều camera cùng lúc
-                        var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = 3, CancellationToken = stoppingToken };
+                        var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = _maxParallelism, CancellationToken = stoppingToken };
 
                         // Thêm timeout cho toàn bộ parallel processing (15 phút)
                         using var parallelCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-                        parallelCts.CancelAfter(TimeSpan.FromMinutes(15));
+                        parallelCts.CancelAfter(TimeSpan.FromMinutes(_maxParallelism == 1 ? 45 : 15));
+                        parallelOptions.CancellationToken = parallelCts.Token;
                         
                         try
                         {
@@ -143,7 +198,10 @@ namespace HcmcRainVision.Backend.BackgroundJobs
                         // Kết thúc Job
                         job.Status = nameof(JobStatus.Completed);
                         job.EndedAt = DateTime.UtcNow;
-                        job.Notes = $"Processed {crawlableStreams.Count}/{streams.Count} streams (skipped non-static: {skippedStreams})";
+                        var quotaNote = IsRemoteQwenProvider()
+                            ? $", remote quota remaining: {GetRemainingDailyInferenceQuota()}"
+                            : string.Empty;
+                        job.Notes = $"Processed {crawlableStreams.Count}/{streams.Count} streams (skipped non-static: {skippedStreams}){quotaNote}";
                         
                         try
                         {
@@ -181,7 +239,10 @@ namespace HcmcRainVision.Backend.BackgroundJobs
                 }
 
                 // Chờ 5 phút
-                await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+                var nextDelayMinutes = IsRemoteQwenProvider()
+                    ? _scanIntervalMinutes
+                    : AppConstants.Timing.CameraScanIntervalMinutes;
+                await Task.Delay(TimeSpan.FromMinutes(nextDelayMinutes), stoppingToken);
             }
         }
 
@@ -298,7 +359,17 @@ namespace HcmcRainVision.Backend.BackgroundJobs
                     // ----------------------------------------------------------------
                     
                     // 3. AI Dự báo (Sử dụng ảnh đã xử lý để tăng độ chính xác)
-                    var prediction = aiService.Predict(processedImageBytes);
+                    if (!TryReserveInferenceQuota(out var quotaReason))
+                    {
+                        attempt.Status = nameof(AttemptStatus.Failed);
+                        attempt.ErrorMessage = quotaReason;
+                        db.IngestionAttempts.Add(attempt);
+                        await db.SaveChangesAsync(token);
+                        _logger.LogWarning("{Reason}", quotaReason);
+                        return;
+                    }
+
+                    var prediction = await aiService.PredictAsync(processedImageBytes, token);
                     bool isRainingNow = prediction.IsRaining;
 
                     // 4. ⚡ TỐI ƯU LƯU TRỮ: CHỈ LƯU ẢNH KHI CÓ MƯA HOẶC CONFIDENCE THẤP
@@ -342,7 +413,7 @@ namespace HcmcRainVision.Backend.BackgroundJobs
                     if (shouldNotify)
                     {
                         // Gửi Firebase Push Notification (tối ưu với Dictionary)
-                        await SendNotificationsOptimizedAsync(stream, prediction.Confidence, subsByWard, firebaseService, db);
+                        await SendNotificationsOptimizedAsync(stream, prediction.Confidence, prediction.RainLevel, subsByWard, firebaseService, db);
                         
                         // GỬI SIGNALR (REAL-TIME CHO WEB) - Gửi theo Group Phường
                         var alertData = new 
@@ -352,6 +423,9 @@ namespace HcmcRainVision.Backend.BackgroundJobs
                             WardName = stream.Camera.Ward?.WardName,
                             DistrictName = stream.Camera.Ward?.DistrictName,
                             ImageUrl = imageUrl,
+                            RainLevel = prediction.RainLevel,
+                            TrafficLevel = prediction.TrafficLevel,
+                            IsRaining = isRainingNow,
                             Confidence = prediction.Confidence,
                             Timestamp = DateTime.UtcNow
                         };
@@ -376,6 +450,10 @@ namespace HcmcRainVision.Backend.BackgroundJobs
                     {
                         CameraId = stream.CameraId,
                         IsRaining = isRainingNow,
+                        RainLevel = prediction.RainLevel,
+                        TrafficLevel = prediction.TrafficLevel,
+                        AiModel = prediction.AiModel,
+                        AiReason = prediction.AiReason,
                         Confidence = prediction.Confidence,
                         ImageUrl = imageUrl, // Dùng URL từ Cloudinary hoặc Local
                         Timestamp = DateTime.UtcNow,
@@ -434,7 +512,8 @@ namespace HcmcRainVision.Backend.BackgroundJobs
 
         private async Task SendNotificationsOptimizedAsync(
             CameraStream stream, 
-            float confidence, 
+            float confidence,
+            string rainLevel,
             Dictionary<string, List<AlertSubscription>> subsByWard,
             IFirebasePushService firebase,
             AppDbContext db)
@@ -490,6 +569,7 @@ namespace HcmcRainVision.Backend.BackgroundJobs
                             {
                                 { "cameraId", stream.CameraId },
                                 { "cameraName", stream.Camera.Name },
+                                { "rainLevel", rainLevel },
                                 { "confidence", confidence.ToString("F2") },
                                 { "timestamp", new DateTimeOffset(VietnamTime.Now, TimeSpan.FromHours(7)).ToString("o") },
                                 { "type", "location_based_alert" }
@@ -503,6 +583,59 @@ namespace HcmcRainVision.Backend.BackgroundJobs
                     }
                 });
             }
+        }
+
+        private bool IsRemoteQwenProvider()
+            => _aiProvider.Equals("RemoteQwen", StringComparison.OrdinalIgnoreCase);
+
+        private int GetRemainingDailyInferenceQuota()
+        {
+            if (!IsRemoteQwenProvider() || _dailyMaxInferences <= 0)
+            {
+                return int.MaxValue;
+            }
+
+            lock (_quotaLock)
+            {
+                ResetQuotaIfNeeded();
+                return Math.Max(0, _dailyMaxInferences - _dailyInferenceCount);
+            }
+        }
+
+        private bool TryReserveInferenceQuota(out string reason)
+        {
+            reason = string.Empty;
+
+            if (!IsRemoteQwenProvider() || _dailyMaxInferences <= 0)
+            {
+                return true;
+            }
+
+            lock (_quotaLock)
+            {
+                ResetQuotaIfNeeded();
+
+                if (_dailyInferenceCount >= _dailyMaxInferences)
+                {
+                    reason = $"RemoteQwen daily inference quota exhausted ({_dailyInferenceCount}/{_dailyMaxInferences}).";
+                    return false;
+                }
+
+                _dailyInferenceCount++;
+                return true;
+            }
+        }
+
+        private void ResetQuotaIfNeeded()
+        {
+            var today = DateTime.UtcNow.Date;
+            if (_quotaDateUtc == today)
+            {
+                return;
+            }
+
+            _quotaDateUtc = today;
+            _dailyInferenceCount = 0;
         }
 
         private static bool IsStaticImageStream(CameraStream stream)

@@ -1,7 +1,7 @@
 namespace HcmcRainVision.Backend.Services.AI
 {
     /// <summary>
-    /// Mock service cho môi trường development/testing - không cần AI model
+    /// Mock service for development/testing when a real AI provider is unavailable.
     /// </summary>
     public class MockRainPredictionService : IRainPredictionService
     {
@@ -10,21 +10,28 @@ namespace HcmcRainVision.Backend.Services.AI
         public MockRainPredictionService(ILogger<MockRainPredictionService> logger)
         {
             _logger = logger;
-            _logger.LogWarning("⚠️ Đang sử dụng MockRainPredictionService (không có AI model thật)");
+            _logger.LogWarning("Using MockRainPredictionService; no real AI model is active.");
         }
 
         public RainPredictionResult Predict(byte[] imageBytes)
         {
-            // Random kết quả để test giao diện
             var random = new Random();
-            bool isRain = random.NextDouble() > 0.5; // 50/50
-            
+            var isRain = random.NextDouble() > 0.5;
+
             return new RainPredictionResult
             {
                 IsRaining = isRain,
-                Confidence = (float)(0.7 + random.NextDouble() * 0.2), // Random từ 70% - 90%
-                Message = "[MOCK] Dữ liệu giả lập"
+                Confidence = (float)(0.7 + random.NextDouble() * 0.2),
+                Message = "[MOCK] Simulated data",
+                RainLevel = isRain ? "medium" : "none",
+                TrafficLevel = "unknown",
+                AiModel = "MockRainPredictionService"
             };
+        }
+
+        public Task<RainPredictionResult> PredictAsync(byte[] imageBytes, CancellationToken token = default)
+        {
+            return Task.FromResult(Predict(imageBytes));
         }
     }
 }

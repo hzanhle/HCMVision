@@ -19,6 +19,9 @@ import { Camera } from "../../types/camera";
 interface WeatherAiResult {
   prediction: string;
   confidenceScore: string;
+  rainLevel?: string;
+  trafficLevel?: string;
+  isRaining?: boolean;
 }
 
 const normalizePrediction = (value: unknown): string => {
@@ -166,8 +169,21 @@ export default function CameraDetailMapScreen({ navigation, route }: any) {
           typeof result.data.confidenceScore === "string"
             ? result.data.confidenceScore
             : "";
-        setAiResult({ prediction, confidenceScore });
-        setAiForCamera(typedCamera.id, { prediction, confidenceScore });
+        const rainLevel =
+          result.data.rainLevel || result.data.predictionDetails?.rainLevel;
+        const trafficLevel =
+          result.data.trafficLevel || result.data.predictionDetails?.trafficLevel;
+        const isRaining =
+          result.data.isRaining ?? result.data.predictionDetails?.isRaining;
+
+        setAiResult({ prediction, confidenceScore, rainLevel, trafficLevel, isRaining });
+        setAiForCamera(typedCamera.id, {
+          prediction,
+          confidenceScore,
+          rainLevel,
+          trafficLevel,
+          isRaining,
+        });
       }
     } catch (err: any) {
       Alert.alert(
@@ -312,6 +328,11 @@ export default function CameraDetailMapScreen({ navigation, route }: any) {
                     <Text className="text-sm font-medium text-gray-900">
                       {aiResult.prediction}
                     </Text>
+                    {aiResult.rainLevel && (
+                      <Text className="text-xs text-gray-500">
+                        Rain: {aiResult.rainLevel} | Traffic: {aiResult.trafficLevel || "unknown"}
+                      </Text>
+                    )}
                     {/* <Text className="text-xs text-gray-500">
                       Confidence: {aiResult.confidenceScore}
                     </Text> */}
