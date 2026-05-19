@@ -84,7 +84,7 @@ API Đăng ký nhận thông báo (`AlertSubscriptionController`) trước đó 
 
 ## 🤖 3. Kế Hoạch Nâng Cấp AI bằng Qwen-3
 
-Hiện tại AI (`RainModel.zip` dùng ML.NET) khá "ngu" và chỉ nhận biết được Mưa/Không Mưa. Yêu cầu mới: Dùng model mã nguồn mở **Qwen-3** (Vision-Language Model) để phân tích **Mưa** + **Kẹt Xe**, và dùng Qwen-3 text model cho **Chatbot**.
+Backend hiện đã chuyển khỏi `RainModel.zip`/ML.NET cũ và dùng hướng **Qwen-3** (Vision-Language Model) để phân tích **Mưa** + **Kẹt Xe**; phần chatbot vẫn có thể được nâng cấp sang Qwen-3 text model nếu cần.
 
 ### 🏗️ Phương Án Triển Khai (Architecture)
 

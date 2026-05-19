@@ -17,7 +17,6 @@ This runtime is for local testing only. The local backend sends a camera image t
 ```json
 "AI": {
   "Provider": "RemoteQwen",
-  "EnableModel": true,
   "MaxParallelism": 1,
   "RemoteQwen": {
     "BaseUrl": "https://your-ngrok-url.ngrok-free.app",

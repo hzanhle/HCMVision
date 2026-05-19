@@ -8,7 +8,6 @@ using HcmcRainVision.Backend.Services.Chatbot;
 using HcmcRainVision.Backend.Hubs;
 using HcmcRainVision.Backend;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.ML;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.AspNetCore.Mvc;
@@ -81,16 +80,17 @@ builder.Services.AddScoped<IChatbotService, ChatbotService>();
 // 4. Đăng ký Background Worker (Chạy ngầm)
 builder.Services.AddHostedService<RainScanningWorker>();
 
-// 5. Đăng ký AI Service với fallback an toàn khi model ML.NET không khả dụng
-var modelFilePath = Path.Combine(builder.Environment.ContentRootPath, "MLModels", "RainModel.zip");
-var enableMlModel = builder.Configuration.GetValue("AI:EnableModel", true);
-var aiProvider = builder.Configuration.GetValue<string>("AI:Provider") ?? "ML.NET";
-var canUseMlModel = enableMlModel && File.Exists(modelFilePath);
+// 5. Register real AI providers only. Invalid provider config fails at startup.
+var aiProvider = builder.Configuration.GetValue<string>("AI:Provider");
+if (string.IsNullOrWhiteSpace(aiProvider))
+{
+    throw new InvalidOperationException("AI:Provider is required. Supported values: RemoteQwen, OllamaQwen.");
+}
 
 builder.Services.Configure<QwenVisionOptions>(builder.Configuration.GetSection("AI:Ollama"));
 builder.Services.Configure<RemoteQwenOptions>(builder.Configuration.GetSection("AI:RemoteQwen"));
 
-if (enableMlModel && aiProvider.Equals("RemoteQwen", StringComparison.OrdinalIgnoreCase))
+if (aiProvider.Equals("RemoteQwen", StringComparison.OrdinalIgnoreCase))
 {
     builder.Services.AddHttpClient<IRainPredictionService, RemoteQwenVisionPredictionService>((sp, client) =>
     {
@@ -104,7 +104,7 @@ if (enableMlModel && aiProvider.Equals("RemoteQwen", StringComparison.OrdinalIgn
         client.Timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 10, 300));
     });
 }
-else if (enableMlModel && aiProvider.Equals("OllamaQwen", StringComparison.OrdinalIgnoreCase))
+else if (aiProvider.Equals("OllamaQwen", StringComparison.OrdinalIgnoreCase))
 {
     builder.Services.AddHttpClient<IRainPredictionService, QwenVisionPredictionService>((sp, client) =>
     {
@@ -115,24 +115,9 @@ else if (enableMlModel && aiProvider.Equals("OllamaQwen", StringComparison.Ordin
         client.Timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 10, 300));
     });
 }
-else if (canUseMlModel)
-{
-    try
-    {
-        builder.Services.AddPredictionEnginePool<ModelInput, ModelOutput>()
-            .FromFile(modelName: "RainModel", filePath: modelFilePath, watchForChanges: true);
-        builder.Services.AddScoped<IRainPredictionService, MlRainPredictionService>();
-    }
-    catch (Exception ex)
-    {
-        builder.Logging.AddConsole();
-        Console.WriteLine($"⚠️ Không thể khởi tạo ML model, fallback sang mock: {ex.Message}");
-        builder.Services.AddScoped<IRainPredictionService, MockRainPredictionService>();
-    }
-}
 else
 {
-    builder.Services.AddScoped<IRainPredictionService, MockRainPredictionService>();
+    throw new InvalidOperationException($"Unsupported AI:Provider '{aiProvider}'. Supported values: RemoteQwen, OllamaQwen.");
 }
 
 // 6. Đăng ký Email Service
