@@ -30,5 +30,17 @@ namespace HcmcRainVision.Backend.Models.Entities
         public DateTime Timestamp { get; set; }
 
         public string? ImageUrl { get; set; }
+
+        public string? ImageStorageProvider { get; set; }
+
+        public string? ImagePublicId { get; set; }
+
+        public DateTime? ImageStoredAtUtc { get; set; }
+
+        public DateTime? ImageExpiresAtUtc { get; set; }
+
+        public DateTime? ImageDeletedAtUtc { get; set; }
+
+        public bool ImageIsRedacted { get; set; }
     }
 }

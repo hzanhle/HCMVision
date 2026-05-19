@@ -65,10 +65,39 @@ namespace HcmcRainVision.Backend.Data
                 .Property(x => x.AiReason)
                 .HasColumnName("ai_reason");
 
+            modelBuilder.Entity<WeatherLog>()
+                .Property(x => x.ImageStorageProvider)
+                .HasColumnName("image_storage_provider");
+
+            modelBuilder.Entity<WeatherLog>()
+                .Property(x => x.ImagePublicId)
+                .HasColumnName("image_public_id");
+
+            modelBuilder.Entity<WeatherLog>()
+                .Property(x => x.ImageStoredAtUtc)
+                .HasColumnName("image_stored_at_utc");
+
+            modelBuilder.Entity<WeatherLog>()
+                .Property(x => x.ImageExpiresAtUtc)
+                .HasColumnName("image_expires_at_utc");
+
+            modelBuilder.Entity<WeatherLog>()
+                .Property(x => x.ImageDeletedAtUtc)
+                .HasColumnName("image_deleted_at_utc");
+
+            modelBuilder.Entity<WeatherLog>()
+                .Property(x => x.ImageIsRedacted)
+                .HasColumnName("image_is_redacted")
+                .HasDefaultValue(false);
+
             // Index tổng hợp cho query theo camera và thời gian (composite index)
             modelBuilder.Entity<WeatherLog>()
                 .HasIndex(x => new { x.CameraId, x.Timestamp })
                 .HasDatabaseName("ix_weather_logs_camera_timestamp");
+
+            modelBuilder.Entity<WeatherLog>()
+                .HasIndex(x => new { x.ImageDeletedAtUtc, x.ImageExpiresAtUtc })
+                .HasDatabaseName("ix_weather_logs_image_retention");
 
             // Index cho IngestionAttempt query performance
             modelBuilder.Entity<IngestionAttempt>()

@@ -2,6 +2,8 @@
 
 This runtime is for local testing only. The local backend sends a camera image to Colab, Colab runs `Qwen/Qwen3-VL-4B-Instruct`, then returns rain and traffic levels.
 
+For traffic camera data retention, attribution, and production reminders, also read `docs/traffic_camera_data_compliance.md`.
+
 ## Daily Test Flow
 
 1. Open `docs/colab_qwen3_vl_4b_runtime.ipynb` in Google Colab.
@@ -67,6 +69,7 @@ The backend maps `isRaining` from `rain_level != "none"` and stores `rain_level`
 - T4 should be the first option. Do not use A100/L4 unless T4 is unavailable or too slow.
 - Keep the ngrok URL and token in `appsettings.Local.json`; do not commit them.
 - Colab is not a production runtime. Use it only for local interactive testing.
+- The current scan config is for local demo sessions, not production. Do not add on-demand route scanning without reviewing `docs/traffic_camera_data_compliance.md`.
 
 ## Troubleshooting
 

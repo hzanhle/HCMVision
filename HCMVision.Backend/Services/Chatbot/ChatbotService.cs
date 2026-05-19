@@ -22,6 +22,8 @@ namespace HcmcRainVision.Backend.Services.Chatbot
         private const int RecentMinutes = 60;
         private const float ConfidenceThreshold = 0.65f;
         private const double RouteAlertRadiusDegrees = 0.009; // about 1km in HCMC
+        private const double RouteCoverageRadiusDegrees = 0.027; // about 3km in HCMC
+        private const int MinFreshRouteCameraCount = 3;
         private const string GeminiEndpoint =
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
 
@@ -91,9 +93,9 @@ namespace HcmcRainVision.Backend.Services.Chatbot
             }
 
             var routePoints = await BuildRoutePointsAsync(origin, destination, cancellationToken);
-            var warnings = await FindRouteWarningsAsync(routePoints, cameras, cancellationToken);
+            var assessment = await AssessRouteAsync(routePoints, cameras, cancellationToken);
 
-            return FormatRouteResponse(origin, destination, routePoints.Count, warnings);
+            return FormatRouteResponse(origin, destination, routePoints.Count, assessment);
         }
 
         private async Task<string> BuildRainContextAsync(CancellationToken cancellationToken)
@@ -186,6 +188,7 @@ namespace HcmcRainVision.Backend.Services.Chatbot
                 {
                     $"Thoi diem cap nhat: {VietnamTime.Now:HH:mm} gio VN",
                     $"Du lieu gan nhat: {latestByCamera.Count} camera trong {RecentMinutes} phut",
+                    "Luu y: Neu khu vuc/lo trinh thieu camera hoac log moi, phai noi chua du du lieu thay vi ket luan chac chan.",
                     "=== Mua va giao thong theo khu vuc ==="
                 };
 
@@ -230,6 +233,7 @@ Use only the provided system data. Do not invent weather, rain, traffic, or rout
 Answer in Vietnamese, short and practical, maximum 3-4 sentences.
 
 If the user asks about a route, prioritize whether areas along that route have rain_level != none or traffic_level slow/jam.
+If route or area data coverage is stale/limited/no_coverage, say the data is not sufficient instead of claiming the route is safe.
 If the route origin/destination is missing or cannot be mapped, ask for a clearer origin and destination.
 Keep compatibility with old rain data: isRaining means rain_level is not none.
 
@@ -326,35 +330,46 @@ REAL SYSTEM DATA FROM RECENT CAMERA AI LOGS:
             };
         }
 
-        private async Task<List<RouteWarning>> FindRouteWarningsAsync(
+        private async Task<RouteAssessment> AssessRouteAsync(
             List<RoutePointDto> routePoints,
             List<Camera> cameras,
             CancellationToken cancellationToken)
         {
             if (routePoints.Count < 2)
             {
-                return new List<RouteWarning>();
+                return new RouteAssessment(
+                    new List<RouteWarning>(),
+                    BuildRouteDataQuality(0, 0));
             }
 
             var coordinates = routePoints.Select(p => new Coordinate(p.Lng, p.Lat)).ToArray();
             var routeLine = new LineString(coordinates) { SRID = 4326 };
             var timeLimit = DateTime.UtcNow.AddMinutes(-RecentMinutes);
+            var routeCameraIds = cameras
+                .Where(c => new Point(c.Longitude, c.Latitude) { SRID = 4326 }
+                    .Distance(routeLine) <= RouteCoverageRadiusDegrees)
+                .Select(c => c.Id)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             var logs = await _db.WeatherLogs
                 .Where(l => l.Timestamp >= timeLimit && l.Location != null)
                 .AsNoTracking()
                 .ToListAsync(cancellationToken);
 
-            var relevantLogs = logs
-                .Where(l => IsRain(l) || IsBadTraffic(l.TrafficLevel))
+            var latestRouteLogs = logs
+                .Where(l => l.CameraId != null && routeCameraIds.Contains(l.CameraId))
                 .GroupBy(l => l.CameraId ?? $"log-{l.Id}")
                 .Select(g => g.OrderByDescending(l => l.Timestamp).First())
+                .ToList();
+
+            var relevantLogs = latestRouteLogs
+                .Where(l => IsRain(l) || IsBadTraffic(l.TrafficLevel))
                 .Where(l => l.Location != null && l.Location.Distance(routeLine) <= RouteAlertRadiusDegrees)
                 .ToList();
 
             var cameraMap = cameras.ToDictionary(c => c.Id, c => c);
 
-            return relevantLogs
+            var warnings = relevantLogs
                 .Select(l =>
                 {
                     cameraMap.TryGetValue(l.CameraId ?? string.Empty, out var camera);
@@ -371,17 +386,29 @@ REAL SYSTEM DATA FROM RECENT CAMERA AI LOGS:
                 .ThenByDescending(w => TrafficRank(w.TrafficLevel))
                 .ThenByDescending(w => w.Confidence)
                 .ToList();
+
+            return new RouteAssessment(
+                warnings,
+                BuildRouteDataQuality(routeCameraIds.Count, latestRouteLogs.Count));
         }
 
         private static string FormatRouteResponse(
             ResolvedPlace origin,
             ResolvedPlace destination,
             int routePointCount,
-            List<RouteWarning> warnings)
+            RouteAssessment assessment)
         {
+            var warnings = assessment.Warnings;
+            var dataQuality = assessment.DataQuality;
+
             if (!warnings.Any())
             {
-                return $"Tuyen {origin.Label} -> {destination.Label}: chua thay mua hoac tac duong dang ke trong {RecentMinutes} phut gan day. Du lieu dua tren {routePointCount} diem route va camera gan tuyen, ban van nen theo doi cap nhat moi truoc khi di.";
+                if (!dataQuality.IsSufficient)
+                {
+                    return $"Tuyen {origin.Label} -> {destination.Label}: chua thay canh bao mua/ket xe trong du lieu hien co, nhung {dataQuality.Note} Minh chua the ket luan chac chan cho tuyen nay.";
+                }
+
+                return $"Tuyen {origin.Label} -> {destination.Label}: chua thay mua hoac tac duong dang ke trong {RecentMinutes} phut gan day. Du lieu dua tren {routePointCount} diem route va {dataQuality.FreshCameraCount}/{dataQuality.NearbyCameraCount} camera gan tuyen co log moi.";
             }
 
             var rainLevel = PickWorstRainLevel(warnings.Select(w => w.RainLevel));
@@ -396,7 +423,11 @@ REAL SYSTEM DATA FROM RECENT CAMERA AI LOGS:
                 ? $"Giao thong: {trafficLevel}."
                 : "Chua thay tac duong ro rang.";
 
-            return $"Tuyen {origin.Label} -> {destination.Label}: co {warnings.Count} diem can chu y gan tuyen trong {RecentMinutes} phut gan day. Mua: {rainLevel}. {trafficText} Khu vuc gan canh bao: {topAreas}. Nen can nhac doi gio, doi huong hoac chuan bi ao mua.";
+            var qualityNote = dataQuality.IsSufficient
+                ? string.Empty
+                : $" Luu y: {dataQuality.Note}";
+
+            return $"Tuyen {origin.Label} -> {destination.Label}: co {warnings.Count} diem can chu y gan tuyen trong {RecentMinutes} phut gan day. Mua: {rainLevel}. {trafficText} Khu vuc gan canh bao: {topAreas}. Nen can nhac doi gio, doi huong hoac chuan bi ao mua.{qualityNote}";
         }
 
         private static bool LooksLikeRouteQuestion(string message)
@@ -629,6 +660,46 @@ REAL SYSTEM DATA FROM RECENT CAMERA AI LOGS:
                 _ => 0
             };
 
+        private static RouteDataQuality BuildRouteDataQuality(int nearbyCameraCount, int freshCameraCount)
+        {
+            if (nearbyCameraCount == 0)
+            {
+                return new RouteDataQuality(
+                    "no_coverage",
+                    false,
+                    nearbyCameraCount,
+                    freshCameraCount,
+                    "khong co camera gan tuyen trong vung phu hien tai.");
+            }
+
+            if (freshCameraCount == 0)
+            {
+                return new RouteDataQuality(
+                    "stale",
+                    false,
+                    nearbyCameraCount,
+                    freshCameraCount,
+                    $"chua co log camera moi gan tuyen trong {RecentMinutes} phut gan day.");
+            }
+
+            if (freshCameraCount < MinFreshRouteCameraCount)
+            {
+                return new RouteDataQuality(
+                    "limited",
+                    false,
+                    nearbyCameraCount,
+                    freshCameraCount,
+                    "du lieu camera gan tuyen con it.");
+            }
+
+            return new RouteDataQuality(
+                "ok",
+                true,
+                nearbyCameraCount,
+                freshCameraCount,
+                "du lieu gan tuyen du de tham khao.");
+        }
+
         private sealed record CameraArea(string District, string Ward);
 
         private sealed record RouteEndpoints(string Origin, string Destination);
@@ -646,5 +717,16 @@ REAL SYSTEM DATA FROM RECENT CAMERA AI LOGS:
             string TrafficLevel,
             float Confidence,
             DateTime Timestamp);
+
+        private sealed record RouteAssessment(
+            List<RouteWarning> Warnings,
+            RouteDataQuality DataQuality);
+
+        private sealed record RouteDataQuality(
+            string Status,
+            bool IsSufficient,
+            int NearbyCameraCount,
+            int FreshCameraCount,
+            string Note);
     }
 }

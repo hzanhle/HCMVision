@@ -17,6 +17,14 @@
     "ApiKey": "your-api-key",
     "ApiSecret": "your-api-secret"
   },
+  "ImageRetention": {
+    "RainLogRetentionHours": 24,
+    "CleanupIntervalMinutes": 60,
+    "CleanupBatchSize": 100,
+    "RedactedStoredImageMaxWidth": 720,
+    "RedactedStoredImageJpegQuality": 70,
+    "RedactedStoredImageBlurKernel": 5
+  },
   "GoogleMaps": {
     "ApiKey": "your-google-maps-api-key"
   },

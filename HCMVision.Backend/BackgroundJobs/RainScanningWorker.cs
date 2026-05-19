@@ -27,6 +27,7 @@ namespace HcmcRainVision.Backend.BackgroundJobs
         private readonly int _maxCamerasPerScan;
         private readonly int _dailyMaxInferences;
         private readonly bool _saveAllRemoteQwenImages;
+        private readonly int _imageRetentionHours;
         private readonly object _quotaLock = new();
         private DateTime _quotaDateUtc = DateTime.UtcNow.Date;
         private int _dailyInferenceCount;
@@ -58,6 +59,7 @@ namespace HcmcRainVision.Backend.BackgroundJobs
             _maxCamerasPerScan = Math.Max(1, configuration.GetValue("AI:RemoteQwen:MaxCamerasPerScan", 20));
             _dailyMaxInferences = Math.Max(0, configuration.GetValue("AI:RemoteQwen:DailyMaxInferences", 160));
             _saveAllRemoteQwenImages = configuration.GetValue("AI:RemoteQwen:SaveAllImages", false);
+            _imageRetentionHours = Math.Clamp(configuration.GetValue("ImageRetention:RainLogRetentionHours", 24), 1, 168);
         }
 
         public override async Task StartAsync(CancellationToken cancellationToken)
@@ -219,7 +221,6 @@ namespace HcmcRainVision.Backend.BackgroundJobs
                         // SỬA LỖI HIỆU NĂNG: Chỉ Cleanup 1 lần mỗi ngày
                         if (DateTime.UtcNow.Day != _lastCleanupTime.Day)
                         {
-                            await CleanupOldImagesAsync();
                             await CleanupOldDataAsync(db, stoppingToken);
                             _lastCleanupTime = DateTime.UtcNow;
                             _logger.LogInformation("🧹 Đã chạy cleanup hàng ngày.");
@@ -257,6 +258,7 @@ namespace HcmcRainVision.Backend.BackgroundJobs
             var firebaseService = scope.ServiceProvider.GetRequiredService<IFirebasePushService>();
             var cloudService = scope.ServiceProvider.GetRequiredService<ICloudStorageService>();
             var preProcessor = scope.ServiceProvider.GetRequiredService<IImagePreProcessor>();
+            var storedImageRedactor = scope.ServiceProvider.GetRequiredService<IStoredImageRedactor>();
 
             var attempt = new IngestionAttempt { AttemptId = Guid.NewGuid(), JobId = jobId, CameraId = stream.CameraId, AttemptAt = DateTime.UtcNow };
             var attemptStartTime = DateTime.UtcNow;
@@ -376,6 +378,7 @@ namespace HcmcRainVision.Backend.BackgroundJobs
 
                     // 4. ⚡ TỐI ƯU LƯU TRỮ: CHỈ LƯU ẢNH KHI CÓ MƯA HOẶC CONFIDENCE THẤP
                     // Tiết kiệm > 90% dung lượng Cloud/Local storage
+                    ImageStorageResult? storedImage = null;
                     string? imageUrl = null;
                     
                     var shouldSaveImage = isRainingNow
@@ -385,17 +388,16 @@ namespace HcmcRainVision.Backend.BackgroundJobs
                     if (shouldSaveImage)
                     {
                         string fileName = $"{stream.CameraId}_{DateTime.UtcNow.Ticks}.jpg";
-                        imageUrl = await cloudService.UploadImageAsync(imageBytes, fileName); // Lưu ảnh GỐC đẹp, không phải ảnh đã resize
-
-                        if (string.IsNullOrEmpty(imageUrl))
+                        var redactedImageBytes = storedImageRedactor.RedactForStorage(imageBytes);
+                        if (redactedImageBytes == null)
                         {
-                            // Fallback: Lưu Local nếu Cloudinary lỗi hoặc chưa config
-                            string localPath = Path.Combine(_env.WebRootPath, "images", "rain_logs", fileName);
-                            Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
-                            await File.WriteAllBytesAsync(localPath, imageBytes, token);
-                            imageUrl = $"/images/rain_logs/{fileName}";
+                            _logger.LogWarning("Skipping image persistence for camera {CameraId}: redaction failed.", stream.CameraId);
                         }
-                        
+                        else
+                        {
+                            storedImage = await SaveLogImageAsync(redactedImageBytes, fileName, cloudService, token);
+                            imageUrl = storedImage?.Url;
+                        }
                         _logger.LogInformation($"💾 Đã lưu ảnh: {fileName} (Mưa: {isRainingNow}, Confidence: {prediction.Confidence:P0})");
                     }
                     else
@@ -462,6 +464,11 @@ namespace HcmcRainVision.Backend.BackgroundJobs
                         AiReason = prediction.AiReason,
                         Confidence = prediction.Confidence,
                         ImageUrl = imageUrl, // Dùng URL từ Cloudinary hoặc Local
+                        ImageStorageProvider = storedImage?.Provider,
+                        ImagePublicId = storedImage?.PublicId,
+                        ImageStoredAtUtc = storedImage?.StoredAtUtc,
+                        ImageExpiresAtUtc = storedImage?.ExpiresAtUtc,
+                        ImageIsRedacted = storedImage?.IsRedacted ?? false,
                         Timestamp = DateTime.UtcNow,
                         // Lưu ý: Gán Location từ Camera vào WeatherLog
                         Location = new NetTopologySuite.Geometries.Point(stream.Camera.Longitude, stream.Camera.Latitude) { SRID = 4326 }
@@ -515,6 +522,46 @@ namespace HcmcRainVision.Backend.BackgroundJobs
             DateTime vnTime = VietnamTime.ToVietnamTime(utcTime);
             return vnTime.ToString("HH:mm dd/MM/yyyy");
         }
+
+        private async Task<ImageStorageResult> SaveLogImageAsync(
+            byte[] redactedImageBytes,
+            string fileName,
+            ICloudStorageService cloudService,
+            CancellationToken cancellationToken)
+        {
+            var storedAtUtc = DateTime.UtcNow;
+            var expiresAtUtc = storedAtUtc.AddHours(_imageRetentionHours);
+            var cloudResult = await cloudService.UploadImageAsync(
+                redactedImageBytes,
+                fileName,
+                storedAtUtc,
+                expiresAtUtc,
+                isRedacted: true,
+                cancellationToken);
+
+            if (cloudResult != null)
+            {
+                return cloudResult;
+            }
+
+            var webRoot = GetWebRoot();
+            var localPath = Path.Combine(webRoot, "images", "rain_logs", fileName);
+            Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
+            await File.WriteAllBytesAsync(localPath, redactedImageBytes, cancellationToken);
+
+            return new ImageStorageResult(
+                $"/images/rain_logs/{fileName}",
+                ImageStorageProviders.Local,
+                fileName,
+                storedAtUtc,
+                expiresAtUtc,
+                IsRedacted: true);
+        }
+
+        private string GetWebRoot()
+            => string.IsNullOrWhiteSpace(_env.WebRootPath)
+                ? Path.Combine(_env.ContentRootPath, "wwwroot")
+                : _env.WebRootPath;
 
         private async Task SendNotificationsOptimizedAsync(
             CameraStream stream, 
@@ -695,34 +742,6 @@ namespace HcmcRainVision.Backend.BackgroundJobs
             return path.Contains("ImageHandler.ashx", StringComparison.OrdinalIgnoreCase);
         }
 
-        // Tự động xóa ảnh cũ, chỉ giữ 2 ngày gần nhất
-        private async Task CleanupOldImagesAsync()
-        {
-            try
-            {
-                var folderPath = Path.Combine(_env.WebRootPath, "images", "rain_logs");
-                var dir = new DirectoryInfo(folderPath);
-                if (dir.Exists)
-                {
-                    await Task.Run(() =>
-                    {
-                        foreach (var file in dir.GetFiles())
-                        {
-                            if (file.CreationTimeUtc < DateTime.UtcNow.AddDays(-2))
-                            {
-                                file.Delete();
-                            }
-                        }
-                    });
-                    _logger.LogInformation("🧹 Đã dọn dẹp ảnh cũ hơn 2 ngày.");
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Lỗi khi cleanup old images");
-            }
-        }
-        
         private async Task CleanupOldDataAsync(AppDbContext db, CancellationToken token)
         {
             try

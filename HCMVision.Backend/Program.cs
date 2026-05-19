@@ -24,7 +24,7 @@ using HcmcRainVision.Backend.Swagger;
 // - Dữ liệu camera từ: http://giaothong.hochiminhcity.gov.vn
 // - Mục đích: Nghiên cứu, học tập, phi lợi nhuận
 // - Frontend PHẢI hiển thị: "Dữ liệu camera từ Cổng thông tin giao thông TP.HCM"
-// - Xem thêm: POLICY.md
+// - Xem them: docs/traffic_camera_data_compliance.md
 // ===================================================================
 
 var builder = WebApplication.CreateBuilder(args);
@@ -74,11 +74,13 @@ builder.Services.AddHttpClient();
 // 3. Đăng ký các Service (Dependency Injection)
 builder.Services.AddSingleton<ICameraCrawler, CameraCrawler>();
 builder.Services.AddSingleton<IImagePreProcessor, ImagePreProcessor>();
+builder.Services.AddSingleton<IStoredImageRedactor, StoredImageRedactor>();
 builder.Services.AddSingleton<ICloudStorageService, CloudStorageService>();
 builder.Services.AddSingleton<IRoutePlanningService, OsrmRoutePlanningService>();
 builder.Services.AddScoped<IChatbotService, ChatbotService>();
 // 4. Đăng ký Background Worker (Chạy ngầm)
 builder.Services.AddHostedService<RainScanningWorker>();
+builder.Services.AddHostedService<ImageRetentionCleanupWorker>();
 
 // 5. Register real AI providers only. Invalid provider config fails at startup.
 var aiProvider = builder.Configuration.GetValue<string>("AI:Provider");

@@ -33,6 +33,7 @@ namespace HcmcRainVision.Backend.Controllers
     {
         private readonly AppDbContext _context;
         private readonly IRoutePlanningService _routePlanningService;
+        private readonly int _imageRetentionHours;
 
         // Hằng số: Bán kính cảnh báo mưa (đơn vị: độ trong WGS84)
         // 0.009 độ ≈ 1km tại TP.HCM (vĩ độ ~10.8°)
@@ -45,16 +46,20 @@ namespace HcmcRainVision.Backend.Controllers
 
         // Bán kính đánh giá độ phủ dữ liệu quanh điểm đến (~3km)
         private const double DESTINATION_COVERAGE_RADIUS_DEGREES = 0.027;
+        private const double ROUTE_COVERAGE_RADIUS_DEGREES = 0.027;
+        private const int MIN_FRESH_ROUTE_CAMERA_COUNT = 3;
 
         // Hằng số: Bán kính xác thực báo cáo crowdsourcing (khoảng 500m)
         private const double VERIFICATION_RADIUS_DEGREES = 0.005;
 
         public WeatherController(
             AppDbContext context,
-            IRoutePlanningService routePlanningService)
+            IRoutePlanningService routePlanningService,
+            IConfiguration configuration)
         {
             _context = context;
             _routePlanningService = routePlanningService;
+            _imageRetentionHours = Math.Clamp(configuration.GetValue("ImageRetention:RainLogRetentionHours", 24), 1, 168);
         }
 
         // API: GET api/weather/latest
@@ -82,8 +87,11 @@ namespace HcmcRainVision.Backend.Controllers
                 TrafficLevel = x.TrafficLevel,
                 Confidence = x.Confidence,
                 TimeAgo = GetTimeAgo(x.Timestamp),
-                ImageUrl = BuildPublicImageUrl(x.ImageUrl),
-                RawImageUrl = x.ImageUrl,
+                ImageUrl = BuildPublicImageUrl(GetVisibleImageUrl(x)),
+                RawImageUrl = GetVisibleImageUrl(x),
+                ImageExpiresAtUtc = x.ImageExpiresAtUtc,
+                ImageDeletedAtUtc = x.ImageDeletedAtUtc,
+                ImageIsRedacted = x.ImageIsRedacted,
                 AiModel = x.AiModel,
                 AiReason = x.AiReason
             });
@@ -105,14 +113,17 @@ namespace HcmcRainVision.Backend.Controllers
             }
 
             limit = Math.Clamp(limit, 1, 500);
-            var timeLimit = DateTime.UtcNow.AddMinutes(-minutes);
+            var now = DateTime.UtcNow;
+            var timeLimit = now.AddMinutes(-minutes);
 
             var query = _context.WeatherLogs
                 .Where(x => x.Timestamp >= timeLimit);
 
             if (onlyWithImages)
             {
-                query = query.Where(x => !string.IsNullOrEmpty(x.ImageUrl));
+                query = query.Where(x => !string.IsNullOrEmpty(x.ImageUrl)
+                                         && x.ImageDeletedAtUtc == null
+                                         && (x.ImageExpiresAtUtc == null || x.ImageExpiresAtUtc > now));
             }
 
             var logs = await query
@@ -152,8 +163,11 @@ namespace HcmcRainVision.Backend.Controllers
                     x.Confidence,
                     TimestampUtc = x.Timestamp,
                     TimeAgo = GetTimeAgo(x.Timestamp),
-                    ImageUrl = BuildPublicImageUrl(x.ImageUrl),
-                    RawImageUrl = x.ImageUrl,
+                    ImageUrl = BuildPublicImageUrl(GetVisibleImageUrl(x)),
+                    RawImageUrl = GetVisibleImageUrl(x),
+                    x.ImageExpiresAtUtc,
+                    x.ImageDeletedAtUtc,
+                    x.ImageIsRedacted,
                     x.AiModel,
                     x.AiReason
                 };
@@ -227,7 +241,10 @@ namespace HcmcRainVision.Backend.Controllers
                     x.RainLevel,
                     x.TrafficLevel,
                     x.Confidence,
-                    x.ImageUrl
+                    x.ImageUrl,
+                    x.ImageExpiresAtUtc,
+                    x.ImageDeletedAtUtc,
+                    x.ImageIsRedacted
                 })
                 .ToListAsync();
 
@@ -272,7 +289,11 @@ namespace HcmcRainVision.Backend.Controllers
                         TrafficLevel = log.TrafficLevel,
                         Confidence = log.Confidence,
                         LastRainAtUtc = log.Timestamp,
-                        ImageUrl = log.ImageUrl
+                        ImageUrl = BuildPublicImageUrl(GetVisibleImageUrl(log.ImageUrl, log.ImageExpiresAtUtc, log.ImageDeletedAtUtc)),
+                        RawImageUrl = GetVisibleImageUrl(log.ImageUrl, log.ImageExpiresAtUtc, log.ImageDeletedAtUtc),
+                        log.ImageExpiresAtUtc,
+                        log.ImageDeletedAtUtc,
+                        log.ImageIsRedacted
                     })
                 .OrderByDescending(x => x.LastRainAtUtc)
                 .ToList();
@@ -294,6 +315,7 @@ namespace HcmcRainVision.Backend.Controllers
             [FromForm] TestAiRequest request,
             [FromServices] IRainPredictionService aiService,
             [FromServices] IImagePreProcessor imagePreProcessor,
+            [FromServices] IStoredImageRedactor storedImageRedactor,
             [FromServices] ICloudStorageService cloudService,
             [FromServices] IWebHostEnvironment env)
         {
@@ -321,12 +343,14 @@ namespace HcmcRainVision.Backend.Controllers
             }
 
             int? savedLogId = null;
+            ImageStorageResult? savedImage = null;
             string? savedImageUrl = null;
 
             if (request.SaveLog)
             {
                 var fileName = $"manual_test_{DateTime.UtcNow.Ticks}.jpg";
-                savedImageUrl = await SaveLogImageAsync(rawBytes, fileName, cloudService, env, HttpContext.RequestAborted);
+                savedImage = await SaveLogImageAsync(rawBytes, fileName, storedImageRedactor, cloudService, env, HttpContext.RequestAborted);
+                savedImageUrl = savedImage?.Url;
 
                 var weatherLog = new WeatherLog
                 {
@@ -338,6 +362,11 @@ namespace HcmcRainVision.Backend.Controllers
                     AiReason = result.AiReason,
                     Confidence = result.Confidence,
                     ImageUrl = savedImageUrl,
+                    ImageStorageProvider = savedImage?.Provider,
+                    ImagePublicId = savedImage?.PublicId,
+                    ImageStoredAtUtc = savedImage?.StoredAtUtc,
+                    ImageExpiresAtUtc = savedImage?.ExpiresAtUtc,
+                    ImageIsRedacted = savedImage?.IsRedacted ?? false,
                     Timestamp = DateTime.UtcNow,
                     Location = null
                 };
@@ -359,6 +388,8 @@ namespace HcmcRainVision.Backend.Controllers
                 AiReason = result.AiReason,
                 SavedLogId = savedLogId,
                 ImageUrl = BuildPublicImageUrl(savedImageUrl),
+                ImageExpiresAtUtc = savedImage?.ExpiresAtUtc,
+                ImageIsRedacted = savedImage?.IsRedacted,
                 IsAIWorking = true
             });
         }
@@ -388,17 +419,53 @@ namespace HcmcRainVision.Backend.Controllers
             return $"{Request.Scheme}://{Request.Host}{path}";
         }
 
-        private async Task<string?> SaveLogImageAsync(
-            byte[] imageBytes,
+        private static string? GetVisibleImageUrl(WeatherLog log)
+            => GetVisibleImageUrl(log.ImageUrl, log.ImageExpiresAtUtc, log.ImageDeletedAtUtc);
+
+        private static string? GetVisibleImageUrl(
+            string? imageUrl,
+            DateTime? imageExpiresAtUtc,
+            DateTime? imageDeletedAtUtc)
+        {
+            if (string.IsNullOrWhiteSpace(imageUrl) || imageDeletedAtUtc.HasValue)
+            {
+                return null;
+            }
+
+            if (imageExpiresAtUtc.HasValue && imageExpiresAtUtc.Value <= DateTime.UtcNow)
+            {
+                return null;
+            }
+
+            return imageUrl;
+        }
+
+        private async Task<ImageStorageResult?> SaveLogImageAsync(
+            byte[] rawImageBytes,
             string fileName,
+            IStoredImageRedactor storedImageRedactor,
             ICloudStorageService cloudService,
             IWebHostEnvironment env,
             CancellationToken cancellationToken)
         {
-            var imageUrl = await cloudService.UploadImageAsync(imageBytes, fileName);
-            if (!string.IsNullOrEmpty(imageUrl))
+            var redactedImageBytes = storedImageRedactor.RedactForStorage(rawImageBytes);
+            if (redactedImageBytes == null)
             {
-                return imageUrl;
+                return null;
+            }
+
+            var storedAtUtc = DateTime.UtcNow;
+            var expiresAtUtc = storedAtUtc.AddHours(_imageRetentionHours);
+            var cloudResult = await cloudService.UploadImageAsync(
+                redactedImageBytes,
+                fileName,
+                storedAtUtc,
+                expiresAtUtc,
+                isRedacted: true,
+                cancellationToken);
+            if (cloudResult != null)
+            {
+                return cloudResult;
             }
 
             var webRoot = string.IsNullOrWhiteSpace(env.WebRootPath)
@@ -406,8 +473,15 @@ namespace HcmcRainVision.Backend.Controllers
                 : env.WebRootPath;
             var localPath = Path.Combine(webRoot, "images", "rain_logs", fileName);
             Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
-            await System.IO.File.WriteAllBytesAsync(localPath, imageBytes, cancellationToken);
-            return $"/images/rain_logs/{fileName}";
+            await System.IO.File.WriteAllBytesAsync(localPath, redactedImageBytes, cancellationToken);
+
+            return new ImageStorageResult(
+                $"/images/rain_logs/{fileName}",
+                ImageStorageProviders.Local,
+                fileName,
+                storedAtUtc,
+                expiresAtUtc,
+                IsRedacted: true);
         }
 
         // API: POST api/weather/report
@@ -629,16 +703,42 @@ namespace HcmcRainVision.Backend.Controllers
 
             // 1. Tạo đường dẫn (LineString) từ danh sách điểm
             var coordinates = routePoints.Select(p => new Coordinate(p.Lng, p.Lat)).ToArray();
-            var routeLine = new LineString(coordinates);
+            var routeLine = new LineString(coordinates) { SRID = 4326 };
 
             // 2. Lấy các điểm đang mưa trong 30 phút qua từ DB
             var timeLimit = DateTime.UtcNow.AddMinutes(-30);
             var rainingLogs = await _context.WeatherLogs
-                .Where(x => (x.IsRaining || x.RainLevel != "none") && x.Timestamp >= timeLimit)
+                .Where(x => (x.IsRaining
+                             || x.RainLevel != "none"
+                             || x.TrafficLevel == "slow"
+                             || x.TrafficLevel == "jam")
+                            && x.Timestamp >= timeLimit)
                 .Select(x => new { x.Location, x.CameraId, x.RainLevel, x.TrafficLevel, x.Confidence })
                 .ToListAsync();
 
             var warnings = new List<object>();
+
+            var routeCameras = await _context.Cameras
+                .AsNoTracking()
+                .Select(c => new { c.Id, c.Latitude, c.Longitude })
+                .ToListAsync(cancellationToken);
+
+            var routeCameraIds = routeCameras
+                .Where(c => new Point(c.Longitude, c.Latitude) { SRID = 4326 }
+                    .Distance(routeLine) <= ROUTE_COVERAGE_RADIUS_DEGREES)
+                .Select(c => c.Id)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var routeFreshCameraCount = routeCameraIds.Count == 0
+                ? 0
+                : await _context.WeatherLogs
+                    .Where(x => x.Timestamp >= timeLimit
+                             && x.CameraId != null
+                             && routeCameraIds.Contains(x.CameraId))
+                    .Select(x => x.CameraId!)
+                    .Distinct()
+                    .CountAsync(cancellationToken);
 
             // 3. Kiểm tra va chạm không gian (Spatial Intersection)
             foreach (var log in rainingLogs)
@@ -659,13 +759,16 @@ namespace HcmcRainVision.Backend.Controllers
                         RainLevel = log.RainLevel,
                         TrafficLevel = log.TrafficLevel,
                         Confidence = log.Confidence,
-                        Message = $"Mưa to gần Camera {log.CameraId}" 
+                        Message = log.RainLevel != "none"
+                            ? $"Mua gan Camera {log.CameraId}"
+                            : $"Giao thong cham/un tac gan Camera {log.CameraId}"
                     });
                 }
             }
 
             var destinationRainHits = 0;
             var destinationCoverageCount = 0;
+            var destinationNearbyCameraCount = 0;
             if (resolvedDestinationPoint != null)
             {
                 var destinationGeo = new Point(resolvedDestinationPoint.Lng, resolvedDestinationPoint.Lat) { SRID = 4326 };
@@ -683,38 +786,48 @@ namespace HcmcRainVision.Backend.Controllers
                     });
                 }
 
+                destinationNearbyCameraCount = routeCameras
+                    .Count(c => new Point(c.Longitude, c.Latitude) { SRID = 4326 }
+                        .Distance(destinationGeo) <= DESTINATION_COVERAGE_RADIUS_DEGREES);
+
                 destinationCoverageCount = await _context.WeatherLogs
                     .Where(x => x.Timestamp >= timeLimit
+                             && x.CameraId != null
                              && x.Location != null
                              && x.Location.Distance(destinationGeo) <= DESTINATION_COVERAGE_RADIUS_DEGREES)
+                    .Select(x => x.CameraId)
+                    .Distinct()
                     .CountAsync(cancellationToken);
-
-                if (destinationCoverageCount == 0)
-                {
-                    warnings.Add(new
-                    {
-                        Lat = resolvedDestinationPoint.Lat,
-                        Lng = resolvedDestinationPoint.Lng,
-                        Message = "Chua du du lieu camera gan diem den trong 30 phut qua. Ket qua co the thap tin cay."
-                    });
-                }
             }
 
-            bool isSafe = warnings.Count == 0;
-            var riskLevel = warnings.Count switch
-            {
-                0 => "thap",
-                <= 2 => "trung_binh",
-                _ => "cao"
-            };
+            var dataQuality = BuildRouteDataQuality(
+                routeCameraIds.Count,
+                routeFreshCameraCount,
+                destinationNearbyCameraCount,
+                destinationCoverageCount,
+                30);
 
-            var summary = isSafe
-                ? "Khong phat hien diem mua nguy hiem tren lo trinh trong 30 phut gan day."
-                : $"Phat hien {warnings.Count} canh bao mua tren lo trinh hoac gan diem den.";
+            bool hasWeatherWarnings = warnings.Count > 0;
+            bool isSafe = !hasWeatherWarnings && dataQuality.Status == "ok";
+            var riskLevel = hasWeatherWarnings
+                ? warnings.Count switch
+                {
+                    <= 2 => "trung_binh",
+                    _ => "cao"
+                }
+                : dataQuality.Status == "ok" ? "thap" : "chua_du_du_lieu";
 
-            var recommendation = isSafe
-                ? "Ban co the di chuyen binh thuong, nhung van nen theo doi cap nhat thoi tiet."
-                : "Nen can nhac doi huong, doi gio di hoac chuan bi ao mua.";
+            var summary = hasWeatherWarnings
+                ? $"Phat hien {warnings.Count} canh bao mua tren lo trinh hoac gan diem den."
+                : dataQuality.Status == "ok"
+                    ? "Khong phat hien diem mua nguy hiem tren lo trinh trong 30 phut gan day."
+                    : "Chua thay canh bao mua/ket xe trong du lieu hien co, nhung du lieu gan tuyen chua du moi/de phu de ket luan chac chan.";
+
+            var recommendation = hasWeatherWarnings
+                ? "Nen can nhac doi huong, doi gio di hoac chuan bi ao mua."
+                : dataQuality.Status == "ok"
+                    ? "Ban co the di chuyen binh thuong, nhung van nen theo doi cap nhat thoi tiet."
+                    : "Nen doi chieu them nguon khac hoac xem cap nhat moi truoc khi di.";
 
             var destinationLabel = resolvedDestinationPoint != null
                 ? $"{resolvedDestinationPoint.Lat.ToString(System.Globalization.CultureInfo.InvariantCulture)},{resolvedDestinationPoint.Lng.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
@@ -723,15 +836,6 @@ namespace HcmcRainVision.Backend.Controllers
             var originLabel = resolvedOriginPoint != null
                 ? $"{resolvedOriginPoint.Lat.ToString(System.Globalization.CultureInfo.InvariantCulture)},{resolvedOriginPoint.Lng.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
                 : null;
-
-            var isCoverageSufficient = destinationCoverageCount >= 3;
-            var dataQualityNote = destinationCoverageCount switch
-            {
-                0 => "Chua co du lieu camera gan diem den trong 30 phut qua.",
-                < 3 => "Du lieu gan diem den con it, nen doi chieu them nguon khac.",
-                _ => "Du lieu camera gan diem den du de tham khao."
-            };
-
             return Ok(new
             {
                 // Payload cũ để tương thích FE hiện tại
@@ -750,7 +854,10 @@ namespace HcmcRainVision.Backend.Controllers
                     routePointCount = routePoints.Count,
                     rainingLogCount = rainingLogs.Count,
                     destinationRainHits,
-                    destinationCoverageCount
+                    destinationCoverageCount,
+                    destinationNearbyCameraCount,
+                    routeNearbyCameraCount = routeCameraIds.Count,
+                    routeFreshCameraCount
                 },
 
                 // Payload mới dễ hiểu hơn cho FE/UI
@@ -777,9 +884,13 @@ namespace HcmcRainVision.Backend.Controllers
                 },
                 DataQuality = new
                 {
+                    dataQuality.Status,
+                    dataQuality.IsSufficient,
+                    RouteNearbyCameraCount = routeCameraIds.Count,
+                    RouteFreshCameraCount30m = routeFreshCameraCount,
+                    DestinationNearbyCameraCount = destinationNearbyCameraCount,
                     DestinationCoverageCount30m = destinationCoverageCount,
-                    IsDestinationCoverageSufficient = isCoverageSufficient,
-                    Note = dataQualityNote
+                    Note = dataQuality.Note
                 }
             });
         }
@@ -832,6 +943,45 @@ namespace HcmcRainVision.Backend.Controllers
             return lat is >= -90 and <= 90
                 && lng is >= -180 and <= 180;
         }
+
+        private static RouteDataQuality BuildRouteDataQuality(
+            int routeNearbyCameraCount,
+            int routeFreshCameraCount,
+            int destinationNearbyCameraCount,
+            int destinationFreshCameraCount,
+            int recentMinutes)
+        {
+            if (routeNearbyCameraCount == 0 && destinationNearbyCameraCount == 0)
+            {
+                return new RouteDataQuality(
+                    "no_coverage",
+                    false,
+                    "Khong co camera gan tuyen/diem den trong vung phu hien tai.");
+            }
+
+            if (routeFreshCameraCount == 0 && destinationFreshCameraCount == 0)
+            {
+                return new RouteDataQuality(
+                    "stale",
+                    false,
+                    $"Chua co log camera moi gan tuyen/diem den trong {recentMinutes} phut gan day.");
+            }
+
+            if (routeFreshCameraCount < MIN_FRESH_ROUTE_CAMERA_COUNT)
+            {
+                return new RouteDataQuality(
+                    "limited",
+                    false,
+                    "Du lieu gan tuyen con it, ket qua chi nen xem la tham khao.");
+            }
+
+            return new RouteDataQuality(
+                "ok",
+                true,
+                "Du lieu camera gan tuyen du de tham khao.");
+        }
+
+        private sealed record RouteDataQuality(string Status, bool IsSufficient, string Note);
 
     }
 }
