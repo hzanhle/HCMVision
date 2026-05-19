@@ -68,3 +68,14 @@ The backend maps `isRaining` from `rain_level != "none"` and stores `rain_level`
 - T4 should be the first option. Do not use A100/L4 unless T4 is unavailable or too slow.
 - Keep the ngrok URL and token in `appsettings.Local.json`; do not commit them.
 - Colab is not a production runtime. Use it only for local interactive testing.
+
+## Troubleshooting
+
+If the install cell reports a Pillow conflict like `gradio requires pillow<12.0`, or the model-load cell fails with `cannot import name '_Ink' from 'PIL._typing'`, run this repair cell in Colab:
+
+```python
+!pip -q uninstall -y pillow PIL
+!pip -q install --no-cache-dir --force-reinstall "pillow==11.3.0"
+```
+
+Then choose `Runtime` > `Restart session`, and rerun the cells from the top.

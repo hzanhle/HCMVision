@@ -26,6 +26,7 @@ namespace HcmcRainVision.Backend.BackgroundJobs
         private readonly int _scanIntervalMinutes;
         private readonly int _maxCamerasPerScan;
         private readonly int _dailyMaxInferences;
+        private readonly bool _saveAllRemoteQwenImages;
         private readonly object _quotaLock = new();
         private DateTime _quotaDateUtc = DateTime.UtcNow.Date;
         private int _dailyInferenceCount;
@@ -56,6 +57,7 @@ namespace HcmcRainVision.Backend.BackgroundJobs
                 240);
             _maxCamerasPerScan = Math.Max(1, configuration.GetValue("AI:RemoteQwen:MaxCamerasPerScan", 20));
             _dailyMaxInferences = Math.Max(0, configuration.GetValue("AI:RemoteQwen:DailyMaxInferences", 160));
+            _saveAllRemoteQwenImages = configuration.GetValue("AI:RemoteQwen:SaveAllImages", false);
         }
 
         public override async Task StartAsync(CancellationToken cancellationToken)
@@ -376,7 +378,11 @@ namespace HcmcRainVision.Backend.BackgroundJobs
                     // Tiết kiệm > 90% dung lượng Cloud/Local storage
                     string? imageUrl = null;
                     
-                    if (isRainingNow || prediction.Confidence < AppConstants.AiPrediction.LowConfidenceThreshold)
+                    var shouldSaveImage = isRainingNow
+                        || prediction.Confidence < AppConstants.AiPrediction.LowConfidenceThreshold
+                        || (IsRemoteQwenProvider() && _saveAllRemoteQwenImages);
+
+                    if (shouldSaveImage)
                     {
                         string fileName = $"{stream.CameraId}_{DateTime.UtcNow.Ticks}.jpg";
                         imageUrl = await cloudService.UploadImageAsync(imageBytes, fileName); // Lưu ảnh GỐC đẹp, không phải ảnh đã resize

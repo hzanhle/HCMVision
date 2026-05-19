@@ -7,6 +7,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="RainTrainer\**\*.cs" />
+    <Content Remove="RainTrainer\**" />
+    <EmbeddedResource Remove="RainTrainer\**" />
+    <None Remove="RainTrainer\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="AspNetCore.HealthChecks.NpgSql" Version="9.0.0" />
     <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
     <PackageReference Include="CloudinaryDotNet" Version="1.28.0" />

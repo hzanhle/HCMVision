@@ -24,6 +24,7 @@ namespace HcmcRainVision.Backend.Controllers
     public class TestAiRequest
     {
         public IFormFile? ImageFile { get; set; }
+        public bool SaveLog { get; set; } = true;
     }
 
     [ApiController]
@@ -65,7 +66,7 @@ namespace HcmcRainVision.Backend.Controllers
             var timeLimit = DateTime.UtcNow.AddMinutes(-30);
 
             var data = await _context.WeatherLogs
-                .Where(x => x.Timestamp >= timeLimit)
+                .Where(x => x.Timestamp >= timeLimit && x.Location != null)
                 .OrderByDescending(x => x.Timestamp)
                 .ToListAsync();
 
@@ -81,12 +82,91 @@ namespace HcmcRainVision.Backend.Controllers
                 TrafficLevel = x.TrafficLevel,
                 Confidence = x.Confidence,
                 TimeAgo = GetTimeAgo(x.Timestamp),
-                ImageUrl = x.ImageUrl,
+                ImageUrl = BuildPublicImageUrl(x.ImageUrl),
+                RawImageUrl = x.ImageUrl,
                 AiModel = x.AiModel,
                 AiReason = x.AiReason
             });
 
             return Ok(result);
+        }
+
+        // API: GET api/weather/logs
+        // Debug endpoint: xem AI logs gan day, bao gom imageUrl de doi chieu ket qua model.
+        [HttpGet("logs")]
+        public async Task<IActionResult> GetWeatherLogs(
+            [FromQuery] int minutes = 180,
+            [FromQuery] int limit = 100,
+            [FromQuery] bool onlyWithImages = false)
+        {
+            if (minutes <= 0 || minutes > 1440)
+            {
+                return BadRequest(new { message = "minutes phai nam trong khoang 1..1440" });
+            }
+
+            limit = Math.Clamp(limit, 1, 500);
+            var timeLimit = DateTime.UtcNow.AddMinutes(-minutes);
+
+            var query = _context.WeatherLogs
+                .Where(x => x.Timestamp >= timeLimit);
+
+            if (onlyWithImages)
+            {
+                query = query.Where(x => !string.IsNullOrEmpty(x.ImageUrl));
+            }
+
+            var logs = await query
+                .OrderByDescending(x => x.Timestamp)
+                .Take(limit)
+                .AsNoTracking()
+                .ToListAsync();
+
+            var cameraIds = logs
+                .Where(x => !string.IsNullOrEmpty(x.CameraId))
+                .Select(x => x.CameraId!)
+                .Distinct()
+                .ToList();
+
+            var cameraMap = await _context.Cameras
+                .Include(c => c.Ward)
+                .Where(c => cameraIds.Contains(c.Id))
+                .AsNoTracking()
+                .ToDictionaryAsync(c => c.Id);
+
+            var data = logs.Select(x =>
+            {
+                cameraMap.TryGetValue(x.CameraId ?? string.Empty, out var camera);
+
+                return new
+                {
+                    x.Id,
+                    x.CameraId,
+                    CameraName = camera?.Name,
+                    WardName = camera?.Ward?.WardName,
+                    DistrictName = camera?.Ward?.DistrictName,
+                    Latitude = x.Location?.Y,
+                    Longitude = x.Location?.X,
+                    x.IsRaining,
+                    x.RainLevel,
+                    x.TrafficLevel,
+                    x.Confidence,
+                    TimestampUtc = x.Timestamp,
+                    TimeAgo = GetTimeAgo(x.Timestamp),
+                    ImageUrl = BuildPublicImageUrl(x.ImageUrl),
+                    RawImageUrl = x.ImageUrl,
+                    x.AiModel,
+                    x.AiReason
+                };
+            }).ToList();
+
+            return Ok(new
+            {
+                Count = data.Count,
+                Minutes = minutes,
+                Limit = limit,
+                OnlyWithImages = onlyWithImages,
+                Data = data
+            });
         }
 
         // API: GET api/weather/raining-cameras/count
@@ -213,7 +293,9 @@ namespace HcmcRainVision.Backend.Controllers
         public async Task<IActionResult> TestAiDirectly(
             [FromForm] TestAiRequest request,
             [FromServices] IRainPredictionService aiService,
-            [FromServices] IImagePreProcessor imagePreProcessor)
+            [FromServices] IImagePreProcessor imagePreProcessor,
+            [FromServices] ICloudStorageService cloudService,
+            [FromServices] IWebHostEnvironment env)
         {
             var imageFile = request.ImageFile;
             if (imageFile == null || imageFile.Length == 0)
@@ -238,6 +320,33 @@ namespace HcmcRainVision.Backend.Controllers
                 });
             }
 
+            int? savedLogId = null;
+            string? savedImageUrl = null;
+
+            if (request.SaveLog)
+            {
+                var fileName = $"manual_test_{DateTime.UtcNow.Ticks}.jpg";
+                savedImageUrl = await SaveLogImageAsync(rawBytes, fileName, cloudService, env, HttpContext.RequestAborted);
+
+                var weatherLog = new WeatherLog
+                {
+                    CameraId = null,
+                    IsRaining = result.RainLevel != "none",
+                    RainLevel = result.RainLevel,
+                    TrafficLevel = result.TrafficLevel,
+                    AiModel = result.AiModel,
+                    AiReason = result.AiReason,
+                    Confidence = result.Confidence,
+                    ImageUrl = savedImageUrl,
+                    Timestamp = DateTime.UtcNow,
+                    Location = null
+                };
+
+                _context.WeatherLogs.Add(weatherLog);
+                await _context.SaveChangesAsync(HttpContext.RequestAborted);
+                savedLogId = weatherLog.Id;
+            }
+
             return Ok(new
             {
                 Message = "Du doan tu AI Model thuc te",
@@ -248,6 +357,8 @@ namespace HcmcRainVision.Backend.Controllers
                 ConfidenceScore = Math.Round(result.Confidence * 100, 2) + " %",
                 AiModel = result.AiModel,
                 AiReason = result.AiReason,
+                SavedLogId = savedLogId,
+                ImageUrl = BuildPublicImageUrl(savedImageUrl),
                 IsAIWorking = true
             });
         }
@@ -259,6 +370,44 @@ namespace HcmcRainVision.Backend.Controllers
             if (span.TotalMinutes < 1) return "Vừa xong";
             if (span.TotalMinutes < 60) return $"{(int)span.TotalMinutes} phút trước";
             return $"{(int)span.TotalHours} giờ trước";
+        }
+
+        private string? BuildPublicImageUrl(string? imageUrl)
+        {
+            if (string.IsNullOrWhiteSpace(imageUrl))
+            {
+                return null;
+            }
+
+            if (Uri.TryCreate(imageUrl, UriKind.Absolute, out _))
+            {
+                return imageUrl;
+            }
+
+            var path = imageUrl.StartsWith('/') ? imageUrl : $"/{imageUrl}";
+            return $"{Request.Scheme}://{Request.Host}{path}";
+        }
+
+        private async Task<string?> SaveLogImageAsync(
+            byte[] imageBytes,
+            string fileName,
+            ICloudStorageService cloudService,
+            IWebHostEnvironment env,
+            CancellationToken cancellationToken)
+        {
+            var imageUrl = await cloudService.UploadImageAsync(imageBytes, fileName);
+            if (!string.IsNullOrEmpty(imageUrl))
+            {
+                return imageUrl;
+            }
+
+            var webRoot = string.IsNullOrWhiteSpace(env.WebRootPath)
+                ? Path.Combine(env.ContentRootPath, "wwwroot")
+                : env.WebRootPath;
+            var localPath = Path.Combine(webRoot, "images", "rain_logs", fileName);
+            Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
+            await System.IO.File.WriteAllBytesAsync(localPath, imageBytes, cancellationToken);
+            return $"/images/rain_logs/{fileName}";
         }
 
         // API: POST api/weather/report

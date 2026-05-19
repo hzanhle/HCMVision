@@ -10,5 +10,6 @@ namespace HcmcRainVision.Backend.Services.AI
         public int ScanIntervalMinutes { get; set; } = 15;
         public int MaxCamerasPerScan { get; set; } = 20;
         public int DailyMaxInferences { get; set; } = 160;
+        public bool SaveAllImages { get; set; }
     }
 }
