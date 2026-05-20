@@ -25,12 +25,6 @@
     "RedactedStoredImageJpegQuality": 70,
     "RedactedStoredImageBlurKernel": 5
   },
-  "GoogleMaps": {
-    "ApiKey": "your-google-maps-api-key"
-  },
-  "Gemini": {
-    "ApiKey": "your-gemini-api-key"
-  },
   "FirebaseSettings": {
     "ServiceAccountPath": "C:\\path\\to\\your\\firebase-adminsdk.json"
   }

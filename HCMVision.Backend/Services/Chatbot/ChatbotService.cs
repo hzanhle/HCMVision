@@ -23,27 +23,31 @@ namespace HcmcRainVision.Backend.Services.Chatbot
         private const float ConfidenceThreshold = 0.65f;
         private const double RouteAlertRadiusDegrees = 0.009; // about 1km in HCMC
         private const double RouteCoverageRadiusDegrees = 0.027; // about 3km in HCMC
+        private const double HcmcMinLatitude = 10.20;
+        private const double HcmcMaxLatitude = 11.20;
+        private const double HcmcMinLongitude = 106.20;
+        private const double HcmcMaxLongitude = 107.20;
         private const int MinFreshRouteCameraCount = 3;
-        private const string GeminiEndpoint =
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
+
+        private static readonly JsonSerializerOptions JsonOptions = new()
+        {
+            PropertyNameCaseInsensitive = true
+        };
 
         private readonly AppDbContext _db;
-        private readonly IHttpClientFactory _httpClientFactory;
         private readonly IRoutePlanningService _routePlanningService;
-        private readonly string _apiKey;
+        private readonly IRemoteQwenChatClient _qwenChatClient;
         private readonly ILogger<ChatbotService> _logger;
 
         public ChatbotService(
             AppDbContext db,
-            IHttpClientFactory httpClientFactory,
             IRoutePlanningService routePlanningService,
-            IConfiguration configuration,
+            IRemoteQwenChatClient qwenChatClient,
             ILogger<ChatbotService> logger)
         {
             _db = db;
-            _httpClientFactory = httpClientFactory;
             _routePlanningService = routePlanningService;
-            _apiKey = configuration["Gemini:ApiKey"] ?? string.Empty;
+            _qwenChatClient = qwenChatClient;
             _logger = logger;
         }
 
@@ -56,7 +60,10 @@ namespace HcmcRainVision.Backend.Services.Chatbot
             }
 
             var rainContext = await BuildRainContextAsync(cancellationToken);
-            return await CallGeminiAsync(userMessage, rainContext, cancellationToken);
+            return await _qwenChatClient.GetReplyAsync(
+                BuildGroundedChatPrompt(rainContext),
+                userMessage,
+                cancellationToken);
         }
 
         public Task<string> GetRainContextAsync(CancellationToken cancellationToken = default)
@@ -69,19 +76,33 @@ namespace HcmcRainVision.Backend.Services.Chatbot
                 return null;
             }
 
-            var endpoints = ExtractRouteEndpoints(userMessage);
-            if (endpoints == null)
-            {
-                return "Ban cho minh diem di va diem den cu the hon, vi du: tu Quan 1 den Quan 7.";
-            }
-
             var cameras = await _db.Cameras
                 .Include(c => c.Ward)
                 .AsNoTracking()
                 .ToListAsync(cancellationToken);
 
+            var endpoints = ExtractRouteEndpoints(userMessage);
+            RoutePlaceExtraction? qwenPlaces = null;
+            if (endpoints == null)
+            {
+                qwenPlaces = await ExtractRoutePlacesWithQwenAsync(userMessage, null, cancellationToken);
+                endpoints = BuildRouteEndpoints(qwenPlaces);
+            }
+
+            if (endpoints == null)
+            {
+                return "Ban cho minh diem di va diem den cu the hon, vi du: tu Quan 1 den Quan 7.";
+            }
+
             var origin = ResolveRoutePlace(endpoints.Origin, cameras);
             var destination = ResolveRoutePlace(endpoints.Destination, cameras);
+
+            if (origin == null || destination == null)
+            {
+                qwenPlaces ??= await ExtractRoutePlacesWithQwenAsync(userMessage, endpoints, cancellationToken);
+                origin ??= ResolveEstimatedPlace(qwenPlaces?.Origin);
+                destination ??= ResolveEstimatedPlace(qwenPlaces?.Destination);
+            }
 
             if (origin == null || destination == null)
             {
@@ -89,7 +110,7 @@ namespace HcmcRainVision.Backend.Services.Chatbot
                     ? "diem di va diem den"
                     : origin == null ? "diem di" : "diem den";
 
-                return $"Minh chua map duoc {missing} vao du lieu camera/quan/phuong hien co. Ban gui ro hon ten quan, phuong, camera hoac toa do lat,lng nhe.";
+                return $"Minh chua xac dinh duoc {missing}. Ban gui ro hon ten dia diem cu the o TP.HCM hoac toa do lat,lng nhe.";
             }
 
             var routePoints = await BuildRoutePointsAsync(origin, destination, cancellationToken);
@@ -219,87 +240,116 @@ namespace HcmcRainVision.Backend.Services.Chatbot
             }
         }
 
-        private async Task<string> CallGeminiAsync(string userMessage, string rainContext, CancellationToken cancellationToken)
+        private static string BuildGroundedChatPrompt(string rainContext)
         {
-            if (string.IsNullOrEmpty(_apiKey))
-            {
-                return "Chatbot chua duoc cau hinh API key. Cac cau hoi tuyen duong co the dung du lieu DB truc tiep neu ban gui ro diem di/den.";
-            }
-
-            var systemPrompt = $"""
+            return $"""
 You are the HCMCRainVision weather and traffic assistant for Ho Chi Minh City.
 
 Use only the provided system data. Do not invent weather, rain, traffic, or route facts.
 Answer in Vietnamese, short and practical, maximum 3-4 sentences.
 
-If the user asks about a route, prioritize whether areas along that route have rain_level != none or traffic_level slow/jam.
-If route or area data coverage is stale/limited/no_coverage, say the data is not sufficient instead of claiming the route is safe.
-If the route origin/destination is missing or cannot be mapped, ask for a clearer origin and destination.
+If the data does not cover the user's area or route, say the data is not sufficient.
 Keep compatibility with old rain data: isRaining means rain_level is not none.
 
 REAL SYSTEM DATA FROM RECENT CAMERA AI LOGS:
 {rainContext}
 """;
+        }
 
-            var requestBody = new
+        private async Task<RoutePlaceExtraction?> ExtractRoutePlacesWithQwenAsync(
+            string userMessage,
+            RouteEndpoints? localEndpoints,
+            CancellationToken cancellationToken)
+        {
+            var systemPrompt = """
+You extract route endpoints for Ho Chi Minh City.
+Return only valid JSON, no markdown and no extra text.
+Use this exact shape:
+{"origin":{"label":"specific place name or null","lat":10.0,"lng":106.0,"ambiguous":false,"reason":"short reason"},"destination":{"label":"specific place name or null","lat":10.0,"lng":106.0,"ambiguous":false,"reason":"short reason"}}
+
+Rules:
+- Only provide coordinates for specific places inside Ho Chi Minh City.
+- If a place is generic or unclear, set label to the user text if useful, lat/lng to null, ambiguous to true.
+- Do not use Google Maps. Estimate from model knowledge only when the place is well-known enough.
+- Use decimal degrees. Keep reasons short.
+""";
+
+            var payload = JsonSerializer.Serialize(new
             {
-                system_instruction = new
-                {
-                    parts = new[] { new { text = systemPrompt } }
-                },
-                contents = new[]
-                {
-                    new
-                    {
-                        role = "user",
-                        parts = new[] { new { text = userMessage } }
-                    }
-                },
-                generationConfig = new
-                {
-                    maxOutputTokens = 400,
-                    temperature = 0.2
-                }
-            };
+                message = userMessage,
+                local_origin = localEndpoints?.Origin,
+                local_destination = localEndpoints?.Destination
+            });
 
-            var json = JsonSerializer.Serialize(requestBody);
-            var client = _httpClientFactory.CreateClient();
-            client.Timeout = TimeSpan.FromSeconds(20);
+            var reply = await _qwenChatClient.GetReplyAsync(systemPrompt, payload, cancellationToken);
+            var json = ExtractJson(reply);
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                _logger.LogDebug("RemoteQwen route extraction did not return JSON: {Reply}", reply);
+                return null;
+            }
 
             try
             {
-                var response = await client.PostAsync(
-                    $"{GeminiEndpoint}?key={_apiKey}",
-                    new StringContent(json, Encoding.UTF8, "application/json"),
-                    cancellationToken);
-
-                var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    _logger.LogWarning("Gemini API failed {Status}: {Body}", response.StatusCode, responseBody);
-                    return "Khong the ket noi voi tro ly AI luc nay. Vui long thu lai sau.";
-                }
-
-                using var doc = JsonDocument.Parse(responseBody);
-                var text = doc.RootElement
-                    .GetProperty("candidates")[0]
-                    .GetProperty("content")
-                    .GetProperty("parts")[0]
-                    .GetProperty("text")
-                    .GetString();
-
-                return text ?? "Khong co phan hoi tu tro ly AI.";
+                return JsonSerializer.Deserialize<RoutePlaceExtraction>(json, JsonOptions);
             }
-            catch (TaskCanceledException)
+            catch (JsonException ex)
             {
-                return "Tro ly AI phan hoi qua cham. Vui long thu lai.";
+                _logger.LogDebug(ex, "Unable to parse RemoteQwen route extraction JSON: {Json}", json);
+                return null;
             }
-            catch (Exception ex)
+        }
+
+        private static RouteEndpoints? BuildRouteEndpoints(RoutePlaceExtraction? extraction)
+        {
+            if (extraction?.Origin == null || extraction.Destination == null)
             {
-                _logger.LogError(ex, "Gemini API call failed");
-                return "Da xay ra loi khi xu ly cau hoi. Vui long thu lai.";
+                return null;
             }
+
+            if (extraction.Origin.Ambiguous || extraction.Destination.Ambiguous)
+            {
+                return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(extraction.Origin.Label)
+                || string.IsNullOrWhiteSpace(extraction.Destination.Label))
+            {
+                return null;
+            }
+
+            return new RouteEndpoints(extraction.Origin.Label, extraction.Destination.Label);
+        }
+
+        private static ResolvedPlace? ResolveEstimatedPlace(RoutePlaceCandidate? candidate)
+        {
+            if (candidate == null
+                || candidate.Ambiguous
+                || string.IsNullOrWhiteSpace(candidate.Label)
+                || !IsValidHcmcCoordinate(candidate.Lat, candidate.Lng))
+            {
+                return null;
+            }
+
+            return new ResolvedPlace(candidate.Label, candidate.Lat!.Value, candidate.Lng!.Value);
+        }
+
+        private static string? ExtractJson(string value)
+        {
+            var trimmed = value.Trim();
+            if (trimmed.StartsWith('{') && trimmed.EndsWith('}'))
+            {
+                return trimmed;
+            }
+
+            var start = trimmed.IndexOf('{');
+            var end = trimmed.LastIndexOf('}');
+            if (start >= 0 && end > start)
+            {
+                return trimmed.Substring(start, end - start + 1);
+            }
+
+            return null;
         }
 
         private async Task<List<RoutePointDto>> BuildRoutePointsAsync(
@@ -502,11 +552,13 @@ REAL SYSTEM DATA FROM RECENT CAMERA AI LOGS:
         {
             if (TryParseCoordinate(input, out var lat, out var lng))
             {
-                return new ResolvedPlace(input, lat, lng);
+                return IsValidHcmcCoordinate(lat, lng)
+                    ? new ResolvedPlace(input, lat, lng)
+                    : null;
             }
 
             var query = NormalizeText(input);
-            if (query.Length < 2)
+            if (query.Length < 2 || IsGenericPlaceQuery(query))
             {
                 return null;
             }
@@ -548,6 +600,21 @@ REAL SYSTEM DATA FROM RECENT CAMERA AI LOGS:
                 && double.TryParse(match.Groups["lng"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out lng)
                 && lat is >= -90 and <= 90
                 && lng is >= -180 and <= 180;
+        }
+
+        private static bool IsValidHcmcCoordinate(double? lat, double? lng)
+            => lat is >= HcmcMinLatitude and <= HcmcMaxLatitude
+                && lng is >= HcmcMinLongitude and <= HcmcMaxLongitude;
+
+        private static bool IsGenericPlaceQuery(string query)
+        {
+            return query is "cho"
+                or "truong"
+                or "nha"
+                or "benh vien"
+                or "sieu thi"
+                or "cong ty"
+                or "co quan";
         }
 
         private static string PickPlaceLabel(string input, List<Camera> matches)
@@ -698,6 +765,26 @@ REAL SYSTEM DATA FROM RECENT CAMERA AI LOGS:
                 nearbyCameraCount,
                 freshCameraCount,
                 "du lieu gan tuyen du de tham khao.");
+        }
+
+        private sealed class RoutePlaceExtraction
+        {
+            public RoutePlaceCandidate? Origin { get; set; }
+
+            public RoutePlaceCandidate? Destination { get; set; }
+        }
+
+        private sealed class RoutePlaceCandidate
+        {
+            public string? Label { get; set; }
+
+            public double? Lat { get; set; }
+
+            public double? Lng { get; set; }
+
+            public bool Ambiguous { get; set; }
+
+            public string? Reason { get; set; }
         }
 
         private sealed record CameraArea(string District, string Ward);

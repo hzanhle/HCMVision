@@ -21,7 +21,7 @@ namespace HcmcRainVision.Backend.Controllers
             _logger = logger;
         }
 
-        // GET api/chatbot/debug — tra ve raw rain context dang duoc gui toi Gemini (khong goi Gemini)
+        // GET api/chatbot/debug - tra ve raw rain context dang duoc gui toi Qwen
         [HttpGet("debug")]
         public async Task<IActionResult> DebugContext(CancellationToken cancellationToken)
         {

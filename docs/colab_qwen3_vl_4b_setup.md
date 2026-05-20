@@ -1,6 +1,6 @@
 # Qwen3-VL 4B Colab Runtime
 
-This runtime is for local testing only. The local backend sends a camera image to Colab, Colab runs `Qwen/Qwen3-VL-4B-Instruct`, then returns rain and traffic levels.
+This runtime is for local testing only. The local backend sends a camera image or chatbot text request to Colab, Colab runs `Qwen/Qwen3-VL-4B-Instruct`, then returns rain/traffic levels or a grounded chatbot reply.
 
 For traffic camera data retention, attribution, and production reminders, also read `docs/traffic_camera_data_compliance.md`.
 
@@ -33,7 +33,7 @@ For traffic camera data retention, attribution, and production reminders, also r
 }
 ```
 
-8. Start backend locally and test `/api/Weather/test-ai` with a sample traffic camera image.
+8. Start backend locally and test `/api/Weather/test-ai` with a sample traffic camera image, then test `/api/chatbot/message`.
 9. When done, set `SessionEnabled` back to `false`, stop the backend, then in Colab choose `Runtime` > `Disconnect and delete runtime`.
 
 ## Quota Settings
@@ -62,6 +62,26 @@ Colab `/predict` must return JSON:
 ```
 
 The backend maps `isRaining` from `rain_level != "none"` and stores `rain_level`, `traffic_level`, `ai_model`, and `ai_reason` in `weather_logs`.
+
+Colab `/chat` must accept JSON:
+
+```json
+{
+  "system_prompt": "grounding instructions and recent system data",
+  "message": "user question",
+  "max_tokens": 400,
+  "temperature": 0.2
+}
+```
+
+and return JSON:
+
+```json
+{
+  "reply": "Vietnamese assistant reply",
+  "model": "Qwen/Qwen3-VL-4B-Instruct"
+}
+```
 
 ## Notes
 

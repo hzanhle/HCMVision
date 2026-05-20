@@ -77,6 +77,17 @@ builder.Services.AddSingleton<IImagePreProcessor, ImagePreProcessor>();
 builder.Services.AddSingleton<IStoredImageRedactor, StoredImageRedactor>();
 builder.Services.AddSingleton<ICloudStorageService, CloudStorageService>();
 builder.Services.AddSingleton<IRoutePlanningService, OsrmRoutePlanningService>();
+builder.Services.AddHttpClient<IRemoteQwenChatClient, RemoteQwenChatClient>((sp, client) =>
+{
+    var config = sp.GetRequiredService<IConfiguration>();
+    var baseUrl = config.GetValue<string>("AI:RemoteQwen:BaseUrl");
+    var timeoutSeconds = config.GetValue("AI:RemoteQwen:TimeoutSeconds", 120);
+    if (!string.IsNullOrWhiteSpace(baseUrl))
+    {
+        client.BaseAddress = new Uri(baseUrl.EndsWith('/') ? baseUrl : $"{baseUrl}/");
+    }
+    client.Timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 10, 300));
+});
 builder.Services.AddScoped<IChatbotService, ChatbotService>();
 // 4. Đăng ký Background Worker (Chạy ngầm)
 builder.Services.AddHostedService<RainScanningWorker>();
