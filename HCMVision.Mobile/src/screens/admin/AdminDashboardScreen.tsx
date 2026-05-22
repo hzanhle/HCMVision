@@ -4,7 +4,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
 import { Ionicons } from "@expo/vector-icons";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { RefreshControl, ScrollView, TouchableOpacity } from "react-native";
 import { adminService, AdminStats, RainFrequency } from "../../services/admin";
 import useAppStore from "../../store/useAppStore";
@@ -17,7 +17,7 @@ export default function AdminDashboardScreen({ navigation }: any) {
     const [rainFreq, setRainFreq] = useState<RainFrequency[]>([]);
     const [error, setError] = useState<string | null>(null);
 
-    const fetchData = async (isRefresh = false) => {
+    const fetchData = useCallback(async (isRefresh = false) => {
         if (!token) return;
         if (isRefresh) setRefreshing(true);
         else setLoading(true);
@@ -44,13 +44,13 @@ export default function AdminDashboardScreen({ navigation }: any) {
             setLoading(false);
             setRefreshing(false);
         }
-    };
+    }, [token]);
 
     useEffect(() => {
         fetchData();
-    }, [token]);
+    }, [fetchData]);
 
-    const onRefresh = () => fetchData(true);
+    const onRefresh = useCallback(() => fetchData(true), [fetchData]);
 
     if (loading && !stats) {
         return (

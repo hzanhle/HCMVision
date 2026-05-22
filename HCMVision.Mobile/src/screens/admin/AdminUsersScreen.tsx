@@ -4,10 +4,12 @@ import { Input, InputField } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Alert, FlatList, Image, RefreshControl, TouchableOpacity } from "react-native";
 import { adminService, AdminUser } from "../../services/admin";
 import useAppStore from "../../store/useAppStore";
+
+const USERS_PAGE_SIZE = 20;
 
 export default function AdminUsersScreen() {
   const token = useAppStore((s) => s.token);
@@ -19,9 +21,7 @@ export default function AdminUsersScreen() {
   const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const pageSize = 20;
-
-  const fetchUsers = async (pageToFetch = 1, searchQuery = search, isRefresh = false) => {
+  const fetchUsers = useCallback(async (pageToFetch = 1, searchQuery = search, isRefresh = false) => {
     if (!token) return;
 
     if (pageToFetch === 1) {
@@ -32,7 +32,7 @@ export default function AdminUsersScreen() {
     setError(null);
 
     try {
-      const res = await adminService.getUsers(token, pageToFetch, pageSize, searchQuery);
+      const res = await adminService.getUsers(token, pageToFetch, USERS_PAGE_SIZE, searchQuery);
       if (res.success && res.data?.data) {
         if (pageToFetch === 1) {
           setUsers(res.data.data);
@@ -41,7 +41,7 @@ export default function AdminUsersScreen() {
         }
 
         // If we got exactly the page size, there might be more
-        setHasMore((res.data.data.length || 0) === pageSize);
+        setHasMore((res.data.data.length || 0) === USERS_PAGE_SIZE);
         setPage(pageToFetch);
       } else {
         setError(res.error || "Failed to load users");
@@ -54,19 +54,19 @@ export default function AdminUsersScreen() {
         setRefreshing(false);
       }
     }
-  };
+  }, [search, token]);
 
   useEffect(() => {
     fetchUsers(1, search);
-  }, [token, search]);
+  }, [fetchUsers, search]);
 
-  const onRefresh = () => fetchUsers(1, search, true);
+  const onRefresh = useCallback(() => fetchUsers(1, search, true), [fetchUsers, search]);
 
-  const loadMore = () => {
+  const loadMore = useCallback(() => {
     if (!loading && !refreshing && hasMore) {
       fetchUsers(page + 1, search);
     }
-  };
+  }, [fetchUsers, hasMore, loading, page, refreshing, search]);
 
   const handleBanToggle = (user: AdminUser) => {
     if (user.role === "Admin") {

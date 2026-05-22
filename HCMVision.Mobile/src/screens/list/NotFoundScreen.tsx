@@ -20,7 +20,7 @@ export default function NotFoundScreen({ navigation }: any) {
             Not Found
           </Heading>
           <Text className="text-base text-gray-600 text-center mb-8 leading-6">
-            The item you're looking for doesn't exist or has been removed.
+            {"The item you're looking for doesn't exist or has been removed."}
           </Text>
           <Button
             size="lg"

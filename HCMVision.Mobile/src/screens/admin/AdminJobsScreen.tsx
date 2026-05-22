@@ -4,10 +4,12 @@ import { Spinner } from "@/components/ui/spinner";
 import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
 import { Ionicons } from "@expo/vector-icons";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { FlatList, RefreshControl, TouchableOpacity } from "react-native";
 import { adminService, IngestionJob, IngestionStats } from "../../services/admin";
 import useAppStore from "../../store/useAppStore";
+
+const INGESTION_PAGE_SIZE = 20;
 
 export default function AdminJobsScreen({ navigation }: any) {
     const token = useAppStore((s) => s.token);
@@ -19,9 +21,7 @@ export default function AdminJobsScreen({ navigation }: any) {
     const [hasMore, setHasMore] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
-    const pageSize = 20;
-
-    const fetchJobs = async (pageToFetch = 1, isRefresh = false) => {
+    const fetchJobs = useCallback(async (pageToFetch = 1, isRefresh = false) => {
         if (!token) return;
 
         if (pageToFetch === 1) {
@@ -42,7 +42,7 @@ export default function AdminJobsScreen({ navigation }: any) {
         setError(null);
 
         try {
-            const res = await adminService.getIngestionJobs(token, pageToFetch, pageSize);
+            const res = await adminService.getIngestionJobs(token, pageToFetch, INGESTION_PAGE_SIZE);
             if (res.success && res.data) {
                 // the response might have jobs array or data array depending on the backend wrapping
                 const newJobs = res.data.jobs || res.data.data || [];
@@ -53,7 +53,7 @@ export default function AdminJobsScreen({ navigation }: any) {
                     setJobs(prev => [...prev, ...newJobs]);
                 }
 
-                setHasMore((res.data.totalPages && pageToFetch < res.data.totalPages) || newJobs.length === pageSize);
+                setHasMore((res.data.totalPages && pageToFetch < res.data.totalPages) || newJobs.length === INGESTION_PAGE_SIZE);
                 setPage(pageToFetch);
             } else {
                 setError(res.error || "Failed to load jobs");
@@ -66,19 +66,19 @@ export default function AdminJobsScreen({ navigation }: any) {
                 setRefreshing(false);
             }
         }
-    };
+    }, [token]);
 
     useEffect(() => {
         fetchJobs(1);
-    }, [token]);
+    }, [fetchJobs]);
 
-    const onRefresh = () => fetchJobs(1, true);
+    const onRefresh = useCallback(() => fetchJobs(1, true), [fetchJobs]);
 
-    const loadMore = () => {
+    const loadMore = useCallback(() => {
         if (!loading && !refreshing && hasMore) {
             fetchJobs(page + 1);
         }
-    };
+    }, [fetchJobs, hasMore, loading, page, refreshing]);
 
     const renderStats = () => {
         if (!stats) return null;

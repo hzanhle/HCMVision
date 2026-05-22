@@ -4,7 +4,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
 import { Ionicons } from "@expo/vector-icons";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Alert, Linking, RefreshControl, ScrollView, TouchableOpacity } from "react-native";
 import { adminService, CameraHealth, FailedCamera } from "../../services/admin";
 import useAppStore from "../../store/useAppStore";
@@ -17,7 +17,7 @@ export default function AdminCamerasScreen() {
     const [healthData, setHealthData] = useState<CameraHealth | null>(null);
     const [error, setError] = useState<string | null>(null);
 
-    const fetchData = async (isRefresh = false) => {
+    const fetchData = useCallback(async (isRefresh = false) => {
         if (!token) return;
         if (isRefresh) setRefreshing(true);
         else setLoading(true);
@@ -29,15 +29,18 @@ export default function AdminCamerasScreen() {
                 adminService.getCameraHealth(token),
             ]);
 
+            let failedError: string | null = null;
+
             if (failedRes.success && failedRes.data) {
                 setFailedCameras(failedRes.data);
             } else {
-                setError(failedRes.error || "Failed to load failed cameras data");
+                failedError = failedRes.error || "Failed to load failed cameras data";
+                setError(failedError);
             }
 
             if (healthRes.success && healthRes.data) {
                 setHealthData(healthRes.data);
-            } else if (!error) {
+            } else if (!failedError) {
                 setError(healthRes.error || "Failed to load camera health data");
             }
         } catch (e: any) {
@@ -46,13 +49,13 @@ export default function AdminCamerasScreen() {
             setLoading(false);
             setRefreshing(false);
         }
-    };
+    }, [token]);
 
     useEffect(() => {
         fetchData();
-    }, [token]);
+    }, [fetchData]);
 
-    const onRefresh = () => fetchData(true);
+    const onRefresh = useCallback(() => fetchData(true), [fetchData]);
 
     if (loading && !failedCameras && !healthData) {
         return (

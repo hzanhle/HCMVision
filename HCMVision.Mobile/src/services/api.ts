@@ -162,7 +162,7 @@ class ApiService {
   }
 
   async checkWeatherRoute(
-    points: Array<{ lat: number; lng: number }>,
+    points: { lat: number; lng: number }[],
   ): Promise<any> {
     return this.post("/api/Weather/check-route", points);
   }

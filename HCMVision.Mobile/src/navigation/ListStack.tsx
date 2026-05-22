@@ -20,8 +20,7 @@ const Stack = createNativeStackNavigator();
 
 export default function ListStack() {
   return (
-    // @ts-ignore - React Navigation v7 type issue
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Navigator id="ListStack" screenOptions={{ headerShown: false }}>
       <Stack.Screen name="ListHome" component={ListHomeScreen} />
       <Stack.Screen name="AllCamerasList" component={AllCamerasListScreen} />
       <Stack.Screen name="NearbyCameras" component={NearbyCamerasScreen} />

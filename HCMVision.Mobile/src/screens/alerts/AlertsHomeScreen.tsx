@@ -39,8 +39,7 @@ export default function AlertsHomeScreen({ navigation }: any) {
         No Alerts
       </Heading>
       <Text className="text-base text-gray-600 text-center leading-6">
-        You'll receive notifications when severe weather is detected in your
-        areas
+        {"You'll receive notifications when severe weather is detected in your areas"}
       </Text>
     </Center>
   );

@@ -7,7 +7,7 @@ import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
 import { Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Alert, Image, RefreshControl, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { authService } from "../../services/auth";
@@ -26,7 +26,7 @@ export default function ProfileScreen({ navigation }: any) {
   const [refreshing, setRefreshing] = useState(false);
   const [avatarLoadError, setAvatarLoadError] = useState(false);
 
-  const fetchProfile = async (isRefresh: boolean = false) => {
+  const fetchProfile = useCallback(async (isRefresh: boolean = false) => {
     if (!token) {
       Alert.alert(
         "Error",
@@ -60,20 +60,20 @@ export default function ProfileScreen({ navigation }: any) {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, [token, updateUser]);
 
   useEffect(() => {
     // Fetch profile on mount
     fetchProfile();
-  }, []);
+  }, [fetchProfile]);
 
   useEffect(() => {
     setAvatarLoadError(false);
   }, [user?.avatarUrl]);
 
-  const onRefresh = () => {
+  const onRefresh = useCallback(() => {
     fetchProfile(true);
-  };
+  }, [fetchProfile]);
 
   const getLocationPermissionText = () => {
     switch (locationPermissionChoice) {

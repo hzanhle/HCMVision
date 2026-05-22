@@ -76,7 +76,7 @@ export default function FilterSheet({
         useNativeDriver: true,
       }).start();
     }
-  }, [visible, initialFilters]);
+  }, [visible, initialFilters, slideAnim]);
 
   const handleClose = () => {
     Animated.timing(slideAnim, {

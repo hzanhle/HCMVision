@@ -172,7 +172,7 @@ export default function LoginScreen({ navigation }: any) {
             {/* Register Link */}
             <HStack space="xs" className="justify-center items-center mt-4">
               <Text size="sm" className="text-typography-500">
-                Don't have an account?
+                {"Don't have an account?"}
               </Text>
               <Pressable onPress={() => navigation.navigate("Register")}>
                 <Text size="sm" bold className="text-primary-600">

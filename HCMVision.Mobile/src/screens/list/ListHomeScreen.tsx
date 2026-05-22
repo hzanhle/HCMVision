@@ -82,9 +82,6 @@ function MenuSection({ title, items }: MenuSectionProps) {
 
 export default function ListHomeScreen({ navigation }: any) {
   const token = useAppStore((s) => s.token);
-  const getCamerasByWeatherStatus = useAppStore(
-    (s) => s.getCamerasByWeatherStatus,
-  );
 
   // Location API (wards)
   const [wardCount, setWardCount] = useState<number>(0);
@@ -235,11 +232,6 @@ export default function ListHomeScreen({ navigation }: any) {
   const badgeOrDash = (count: number, loading: boolean): number | string =>
     loading ? "…" : count;
 
-  // These still come from mock store (rain status isn't in Camera API)
-  const heavyCount = getCamerasByWeatherStatus("heavy").length;
-  const mediumCount = getCamerasByWeatherStatus("medium").length;
-  const lightCount = getCamerasByWeatherStatus("light").length;
-
   const cameraItems: MenuItem[] = [
     {
       icon: "📹",
@@ -305,30 +297,6 @@ export default function ListHomeScreen({ navigation }: any) {
 
   ];
 
-  const weatherItems: MenuItem[] = [
-    {
-      icon: "⛈️",
-      label: "Heavy Weather",
-      badge: heavyCount,
-      badgeColor: "bg-red-600",
-      onPress: () => navigation.navigate("HeavyWeatherList"),
-    },
-    {
-      icon: "🌧️",
-      label: "Medium Weather",
-      badge: mediumCount,
-      badgeColor: "bg-yellow-500",
-      onPress: () => navigation.navigate("MediumWeatherList"),
-    },
-    {
-      icon: "🌦️",
-      label: "Light Weather",
-      badge: lightCount,
-      badgeColor: "bg-blue-400",
-      onPress: () => navigation.navigate("LightWeatherList"),
-    },
-  ];
-
   return (
     <View className="flex-1 bg-gray-50">
       <StatusBar style="dark" />
@@ -352,7 +320,6 @@ export default function ListHomeScreen({ navigation }: any) {
       >
         <MenuSection title="CAMERAS" items={cameraItems} />
         <MenuSection title="AREAS" items={areaItems} />
-        {/* <MenuSection title="BY WEATHER STATUS" items={weatherItems} /> */}
         <View className="h-8" />
       </ScrollView>
     </View>

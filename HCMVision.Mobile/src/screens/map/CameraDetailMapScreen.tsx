@@ -144,7 +144,6 @@ export default function CameraDetailMapScreen({ navigation, route }: any) {
     );
   };
 
-  const streamUrl = typedCamera.streamUrl;
   const streams = typedCamera.streams || [];
   const statusLogs = typedCamera.statusLogs || [];
 

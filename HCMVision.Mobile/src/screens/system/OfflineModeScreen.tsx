@@ -25,7 +25,7 @@ export default function OfflineModeScreen({ navigation }: any) {
           </Center>
 
           <Text className="text-2xl font-bold text-gray-900 mb-3">
-            You're Offline
+            {"You're Offline"}
           </Text>
 
           <Text className="text-[15px] text-gray-600 text-center leading-6 mb-8">
@@ -40,7 +40,7 @@ export default function OfflineModeScreen({ navigation }: any) {
               • Live camera feeds unavailable
             </Text>
             <Text className="text-sm text-gray-500 mb-2">
-              • Alerts won't update
+              {"• Alerts won't update"}
             </Text>
           </VStack>
         </VStack>

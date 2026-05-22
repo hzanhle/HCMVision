@@ -13,6 +13,7 @@ const Stack = createNativeStackNavigator();
 export default function AdminStack() {
     return (
         <Stack.Navigator
+            id="AdminStack"
             screenOptions={{
                 headerShown: true,
                 headerBackTitle: "Back",

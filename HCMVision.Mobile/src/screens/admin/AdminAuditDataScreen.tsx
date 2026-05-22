@@ -4,7 +4,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
 import { Ionicons } from "@expo/vector-icons";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Alert, FlatList, RefreshControl } from "react-native";
 import { adminService, AuditData } from "../../services/admin";
 import useAppStore from "../../store/useAppStore";
@@ -16,7 +16,7 @@ export default function AdminAuditDataScreen() {
   const [data, setData] = useState<AuditData[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchData = async (isRefresh = false) => {
+  const fetchData = useCallback(async (isRefresh = false) => {
     if (!token) return;
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
@@ -35,13 +35,13 @@ export default function AdminAuditDataScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, [token]);
 
   useEffect(() => {
     fetchData();
-  }, [token]);
+  }, [fetchData]);
 
-  const onRefresh = () => fetchData(true);
+  const onRefresh = useCallback(() => fetchData(true), [fetchData]);
 
   const renderItem = ({ item }: { item: AuditData }) => {
     const isMismatch = item.userSaid?.toLowerCase() !== item.aiSaid?.toLowerCase();

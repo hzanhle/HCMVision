@@ -98,7 +98,6 @@ export default function NearbyCamerasScreen({ navigation }: any) {
 
   useEffect(() => {
     loadNearby();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   const EmptyComponent = () => (

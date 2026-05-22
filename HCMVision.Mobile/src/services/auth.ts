@@ -73,7 +73,7 @@ const apiCall = async (
     if (text && contentType && contentType.includes("application/json")) {
       try {
         responseData = JSON.parse(text);
-      } catch (parseError) {
+      } catch {
         console.warn("Failed to parse JSON response:", text);
         responseData = { message: text };
       }

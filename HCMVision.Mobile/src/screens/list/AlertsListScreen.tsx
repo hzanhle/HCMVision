@@ -31,7 +31,7 @@ export default function AlertsListScreen({ navigation }: any) {
         No Alerts
       </Heading>
       <Text className="text-base text-gray-600 text-center leading-6">
-        You're all caught up!
+        {"You're all caught up!"}
       </Text>
     </Center>
   );

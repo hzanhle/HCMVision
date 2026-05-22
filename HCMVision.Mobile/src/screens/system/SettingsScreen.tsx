@@ -6,7 +6,7 @@ import { HStack } from "@/components/ui/hstack";
 import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Alert, Image, ScrollView, Switch } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { subscriptionsService } from "../../services/subscriptions";
@@ -16,10 +16,8 @@ export default function SettingsScreen({ navigation }: any) {
   const user = useAppStore((s) => s.user);
   const token = useAppStore((s) => s.token);
   const notificationEnabled = useAppStore((s) => s.notificationEnabled);
-  const offlineMode = useAppStore((s) => s.offlineMode);
   const units = useAppStore((s) => s.units);
   const setNotificationEnabled = useAppStore((s) => s.setNotificationEnabled);
-  const setOfflineMode = useAppStore((s) => s.setOfflineMode);
   const setUnits = useAppStore((s) => s.setUnits);
   const clearCache = useAppStore((s) => s.clearCache);
   const logout = useAppStore((s) => s.logout);
@@ -27,17 +25,17 @@ export default function SettingsScreen({ navigation }: any) {
     useState(false);
   const [avatarLoadError, setAvatarLoadError] = useState(false);
 
-  const syncNotificationSwitchFromSubscriptions = async () => {
+  const syncNotificationSwitchFromSubscriptions = useCallback(async () => {
     if (!token) return;
     const result = await subscriptionsService.getAll(token);
     if (!result.success) return;
     const hasEnabled = (result.data || []).some((sub) => sub.isEnabled);
     setNotificationEnabled(hasEnabled);
-  };
+  }, [token, setNotificationEnabled]);
 
   useEffect(() => {
     syncNotificationSwitchFromSubscriptions();
-  }, [token]);
+  }, [syncNotificationSwitchFromSubscriptions]);
 
   useEffect(() => {
     setAvatarLoadError(false);

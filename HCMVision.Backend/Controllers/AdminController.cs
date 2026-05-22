@@ -187,7 +187,10 @@ namespace HcmcRainVision.Backend.Controllers
                 .Select(c => new {
                     c.Id,
                     c.Name,
-                    StreamUrl = c.Streams.FirstOrDefault(s => s.IsPrimary) != null ? c.Streams.FirstOrDefault(s => s.IsPrimary).StreamUrl : "N/A",
+                    StreamUrl = c.Streams
+                        .Where(s => s.IsPrimary)
+                        .Select(s => s.StreamUrl)
+                        .FirstOrDefault() ?? "N/A",
                     c.Latitude,
                     c.Longitude,
                     Status = "Offline - Không có dữ liệu mới"
@@ -218,7 +221,10 @@ namespace HcmcRainVision.Backend.Controllers
                                 .Where(l => l.CameraId == c.Id)
                                 .OrderByDescending(l => l.CheckedAt)
                                 .FirstOrDefault(),
-                    StreamUrl = c.Streams.FirstOrDefault(s => s.IsPrimary).StreamUrl
+                    StreamUrl = c.Streams
+                        .Where(s => s.IsPrimary)
+                        .Select(s => s.StreamUrl)
+                        .FirstOrDefault() ?? "N/A"
                 })
                 .ToListAsync();
 

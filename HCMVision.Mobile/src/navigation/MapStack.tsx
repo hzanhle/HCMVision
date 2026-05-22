@@ -12,7 +12,7 @@ const Stack = createNativeStackNavigator();
 
 export default function MapStack() {
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Navigator id="MapStack" screenOptions={{ headerShown: false }}>
       <Stack.Screen name="MapHome" component={MapHomeScreen} />
       <Stack.Screen name="Heatmap" component={HeatmapScreen} />
       <Stack.Screen name="AllCamerasMap" component={AllCamerasMapScreen} />

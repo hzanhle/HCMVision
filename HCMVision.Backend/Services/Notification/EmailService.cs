@@ -26,9 +26,24 @@ namespace HcmcRainVision.Backend.Services.Notification
             try
             {
                 var emailSettings = _config.GetSection("EmailSettings");
+                var smtpServer = emailSettings["SmtpServer"];
+                var senderEmail = emailSettings["SenderEmail"];
+                var senderName = emailSettings["SenderName"] ?? "HCMC Rain Vision Alert";
+                var password = emailSettings["Password"];
+                var port = int.TryParse(emailSettings["Port"], out var configuredPort)
+                    ? configuredPort
+                    : 587;
+
+                if (string.IsNullOrWhiteSpace(smtpServer)
+                    || string.IsNullOrWhiteSpace(senderEmail)
+                    || string.IsNullOrWhiteSpace(password))
+                {
+                    _logger.LogError("EmailSettings is incomplete. Cannot send email to {RecipientEmail}.", recipientEmail);
+                    return;
+                }
 
                 var message = new MimeMessage();
-                message.From.Add(new MailboxAddress(emailSettings["SenderName"], emailSettings["SenderEmail"]));
+                message.From.Add(new MailboxAddress(senderName, senderEmail));
                 message.To.Add(new MailboxAddress("", recipientEmail));
                 message.Subject = subject;
 
@@ -40,12 +55,12 @@ namespace HcmcRainVision.Backend.Services.Notification
                 {
                     // Kết nối đến SMTP Server
                     await client.ConnectAsync(
-                        emailSettings["SmtpServer"], 
-                        int.Parse(emailSettings["Port"] ?? "587"), 
+                        smtpServer,
+                        port,
                         MailKit.Security.SecureSocketOptions.StartTls);
                     
                     // Đăng nhập
-                    await client.AuthenticateAsync(emailSettings["SenderEmail"], emailSettings["Password"]);
+                    await client.AuthenticateAsync(senderEmail, password);
                     
                     // Gửi mail
                     await client.SendAsync(message);

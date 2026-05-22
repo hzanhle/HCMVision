@@ -6,7 +6,7 @@ import { Input, InputField } from "@/components/ui/input";
 import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Modal,
@@ -41,7 +41,7 @@ export default function AlertSubscriptionsScreen() {
     return val;
   }, [thresholdProbability]);
 
-  const loadSubscriptions = async () => {
+  const loadSubscriptions = useCallback(async () => {
     const result = await subscriptionsService.getAll(token || undefined);
     if (result.success) {
       const items = result.data || [];
@@ -50,19 +50,20 @@ export default function AlertSubscriptionsScreen() {
     } else {
       Alert.alert("Error", result.error || "Failed to load subscriptions");
     }
-  };
+  }, [setNotificationEnabled, token]);
 
-  const loadDistricts = async () => {
+  const loadDistricts = useCallback(async () => {
     const result = await locationService.getDistricts(token || undefined);
     if (result.success && result.data) {
       setDistricts(result.data);
-      if (!selectedDistrict && result.data.length > 0) {
-        setSelectedDistrict(result.data[0]);
-      }
+      setSelectedDistrict((current) => {
+        if (!current) return result.data?.[0] || "";
+        return result.data?.includes(current) ? current : result.data?.[0] || "";
+      });
     }
-  };
+  }, [token]);
 
-  const loadWardsByDistrict = async (districtName: string) => {
+  const loadWardsByDistrict = useCallback(async (districtName: string) => {
     if (!districtName) return;
     const result = await locationService.getWardsByDistrict(
       districtName,
@@ -70,14 +71,14 @@ export default function AlertSubscriptionsScreen() {
     );
     if (result.success && result.data) {
       setWards(result.data);
-      const stillValid = result.data.some(
-        (ward) => ward.wardId === selectedWard?.wardId,
-      );
-      if (!stillValid) {
-        setSelectedWard(result.data[0] || null);
-      }
+      setSelectedWard((current) => {
+        const stillValid = result.data?.some(
+          (ward) => ward.wardId === current?.wardId,
+        );
+        return stillValid ? current : result.data?.[0] || null;
+      });
     }
-  };
+  }, [token]);
 
   useEffect(() => {
     if (!token) return;
@@ -89,13 +90,13 @@ export default function AlertSubscriptionsScreen() {
     };
 
     init();
-  }, [token]);
+  }, [loadDistricts, loadSubscriptions, token]);
 
   useEffect(() => {
     if (selectedDistrict) {
       loadWardsByDistrict(selectedDistrict);
     }
-  }, [selectedDistrict, token]);
+  }, [loadWardsByDistrict, selectedDistrict]);
 
   const handleCreateSubscription = async () => {
     if (!selectedWard?.wardId) {

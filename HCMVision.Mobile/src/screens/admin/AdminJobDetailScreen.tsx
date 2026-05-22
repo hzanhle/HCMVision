@@ -2,7 +2,7 @@ import { Box } from "@/components/ui/box";
 import { Center } from "@/components/ui/center";
 import { Spinner } from "@/components/ui/spinner";
 import { Text } from "@/components/ui/text";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { FlatList, RefreshControl } from "react-native";
 import { adminService, IngestionJob, IngestionJobAttempt } from "../../services/admin";
 import useAppStore from "../../store/useAppStore";
@@ -15,7 +15,7 @@ export default function AdminJobDetailScreen({ route }: any) {
     const [job, setJob] = useState<IngestionJob | null>(null);
     const [error, setError] = useState<string | null>(null);
 
-    const fetchJob = async (isRefresh = false) => {
+    const fetchJob = useCallback(async (isRefresh = false) => {
         if (!token || !jobId) return;
         if (isRefresh) setRefreshing(true);
         else setLoading(true);
@@ -34,13 +34,13 @@ export default function AdminJobDetailScreen({ route }: any) {
             setLoading(false);
             setRefreshing(false);
         }
-    };
+    }, [jobId, token]);
 
     useEffect(() => {
         fetchJob();
-    }, [token, jobId]);
+    }, [fetchJob]);
 
-    const onRefresh = () => fetchJob(true);
+    const onRefresh = useCallback(() => fetchJob(true), [fetchJob]);
 
     if (loading && !job) {
         return (

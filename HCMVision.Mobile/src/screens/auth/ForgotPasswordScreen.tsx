@@ -110,8 +110,7 @@ export default function ForgotPasswordScreen({
               Forgot Password
             </Heading>
             <Text size="md" className="text-typography-500 text-center px-8">
-              Enter your email address and we'll send you instructions to reset
-              your password
+              {"Enter your email address and we'll send you instructions to reset your password"}
             </Text>
           </VStack>
 
@@ -169,7 +168,7 @@ export default function ForgotPasswordScreen({
             {/* Sign Up Link */}
             <HStack space="xs" className="justify-center items-center mt-4">
               <Text size="sm" className="text-typography-500">
-                Don't have an account?
+                {"Don't have an account?"}
               </Text>
               <Pressable onPress={() => navigation.navigate("Register")}>
                 <Text size="sm" bold className="text-primary-600">

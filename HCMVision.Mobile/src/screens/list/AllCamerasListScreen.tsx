@@ -7,7 +7,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
 import { StatusBar } from "expo-status-bar";
-import { ChevronLeft, MapPin, SortAsc, SortDesc } from "lucide-react-native";
+import { ChevronLeft, MapPin } from "lucide-react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
@@ -23,8 +23,8 @@ import { locationService } from "../../services/location";
 import useAppStore from "../../store/useAppStore";
 import { Camera } from "../../types/camera";
 
-type SortField = "name" | "status" | "id";
-type SortDir = "asc" | "desc";
+const DEFAULT_SORT_FIELD = "name";
+const PAGE_SIZE = 10;
 
 export default function AllCamerasListScreen({ navigation }: any) {
   const [cameras, setCameras] = useState<Camera[]>([]);
@@ -51,11 +51,6 @@ export default function AllCamerasListScreen({ navigation }: any) {
 
   // Search & sort
   const [searchQuery, setSearchQuery] = useState("");
-  const [sortField, setSortField] = useState<SortField>("name");
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
-
-  const PAGE_SIZE = 10;
-
   const loadDistrictWardMap = useCallback(async () => {
     if (!token) return;
     const [districtRes, wardsRes] = await Promise.all([
@@ -89,7 +84,7 @@ export default function AllCamerasListScreen({ navigation }: any) {
           page: pageNum,
           pageSize: PAGE_SIZE,
           search: searchQuery.trim() || undefined,
-          sortBy: sortField,
+          sortBy: DEFAULT_SORT_FIELD,
         });
 
         if (!result.success || !result.data) {
@@ -116,7 +111,7 @@ export default function AllCamerasListScreen({ navigation }: any) {
         loadingMore.current = false;
       }
     },
-    [searchQuery, sortField],
+    [searchQuery],
   );
 
   // Initial load + reload when search/sort changes
@@ -143,15 +138,6 @@ export default function AllCamerasListScreen({ navigation }: any) {
     }
   }, [loading, refreshing, hasMore, page, fetchCameras]);
 
-  const toggleSort = (field: SortField) => {
-    if (sortField === field) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    } else {
-      setSortField(field);
-      setSortDir("asc");
-    }
-  };
-
   const districtFilteredCameras = useMemo(() => {
     if (selectedDistrict === "ALL") return cameras;
     return cameras.filter((cam) => {
@@ -165,29 +151,6 @@ export default function AllCamerasListScreen({ navigation }: any) {
       screen: "CameraDetailMap",
       params: { camera },
     });
-  };
-
-  const renderSortBtn = (field: SortField, label: string) => {
-    const active = sortField === field;
-    return (
-      <TouchableOpacity
-        onPress={() => toggleSort(field)}
-        className={`flex-row items-center gap-1 px-3 py-1.5 rounded-full border ${active ? "bg-blue-600 border-blue-600" : "border-gray-300 bg-white"
-          }`}
-      >
-        <Text
-          className={`text-xs font-medium ${active ? "text-white" : "text-gray-600"}`}
-        >
-          {label}
-        </Text>
-        {active &&
-          (sortDir === "asc" ? (
-            <SortAsc size={12} color="#fff" />
-          ) : (
-            <SortDesc size={12} color="#fff" />
-          ))}
-      </TouchableOpacity>
-    );
   };
 
   const renderCamera = ({ item }: { item: Camera }) => {

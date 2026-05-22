@@ -7,7 +7,7 @@ import { Text } from "@/components/ui/text";
 import { VStack } from "@/components/ui/vstack";
 import * as ImagePicker from "expo-image-picker";
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Image,
@@ -55,7 +55,7 @@ export default function EditProfileScreen({ navigation }: any) {
 
   const isLocationDisabled = useMemo(() => !token, [token]);
 
-  const loadDistricts = async () => {
+  const loadDistricts = useCallback(async () => {
     if (!token) return;
     setIsLoadingDistricts(true);
     const result = await locationService.getDistricts(token);
@@ -67,18 +67,13 @@ export default function EditProfileScreen({ navigation }: any) {
     }
 
     setDistricts(result.data);
+    setSelectedDistrict((current) => {
+      if (!current) return result.data?.[0] || "";
+      return result.data?.includes(current) ? current : result.data?.[0] || "";
+    });
+  }, [token]);
 
-    if (result.data.length > 0 && !selectedDistrict) {
-      setSelectedDistrict(result.data[0]);
-      return;
-    }
-
-    if (selectedDistrict && !result.data.includes(selectedDistrict)) {
-      setSelectedDistrict(result.data[0] || "");
-    }
-  };
-
-  const loadWardsByDistrict = async (districtName: string) => {
+  const loadWardsByDistrict = useCallback(async (districtName: string) => {
     if (!token || !districtName) return;
     setIsLoadingWards(true);
     const result = await locationService.getWardsByDistrict(
@@ -93,24 +88,23 @@ export default function EditProfileScreen({ navigation }: any) {
     }
 
     setWards(result.data);
-
-    const stillValid = result.data.some(
-      (w) => w.wardId === selectedWard?.wardId,
-    );
-    if (!stillValid) {
-      setSelectedWard(result.data[0] || null);
-    }
-  };
+    setSelectedWard((current) => {
+      const stillValid = result.data?.some(
+        (w) => w.wardId === current?.wardId,
+      );
+      return stillValid ? current : result.data?.[0] || null;
+    });
+  }, [token]);
 
   useEffect(() => {
     loadDistricts();
-  }, [token]);
+  }, [loadDistricts]);
 
   useEffect(() => {
     if (selectedDistrict) {
       loadWardsByDistrict(selectedDistrict);
     }
-  }, [selectedDistrict, token]);
+  }, [loadWardsByDistrict, selectedDistrict]);
 
   const handleSave = async () => {
     if (!name.trim()) {
